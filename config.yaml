@@ -1,0 +1,42 @@
+# UP Bhulekh khatedar finder — configuration
+portal_url: "https://upbhulekh.gov.in/"
+db_path: "data/bhulekh.sqlite"
+output_dir: "output"
+extracts_dir: "output/extracts"
+
+# Fasli bands to search. "999" = current khatauni (portal value). Older bands are added per village
+# only when the portal offers them. Set old_fasli: true to also search the older band during the scan.
+old_fasli: false
+
+# when a single-letter search returns at least this many rows, re-run it with every two-character
+# prefix and merge (guards against any server-side result cap)
+expand_above_rows: 1000
+
+concurrency:
+  start: 6          # tabs to open at launch
+  max: 24           # hard cap ("aggressive" — raise only if the portal stays healthy)
+  ramp_every_s: 45  # add +2 tabs after this many seconds without errors
+  backoff_factor: 0.5
+  min: 2
+  village_timeout_s: 150
+  retries: 3
+
+targets:
+  - id: T1
+    label: "साबिर अली s/o भल्लू (grandfather)"
+    khatedar: ["साबिर अली", "साबिर", "सबीर अली", "साबिर अली अंसारी"]
+    father: ["भल्लू", "भल्लु", "भाल्लू", "भल्लू अली"]
+    prefixes: ["स"]
+  - id: T2
+    label: "सादिक अली s/o साबिर अली (father)"
+    khatedar: ["सादिक अली", "सादिक", "सदीक अली", "सादिक़ अली", "सादिक अली अंसारी"]
+    father: ["साबिर अली", "साबिर", "सबीर अली"]
+    prefixes: ["स"]
+  - id: T3
+    label: "विजय शुक्ला s/o R.S. शुक्ला (friend's father, Alambagh Lucknow)"
+    khatedar: ["विजय शुक्ला", "विजय शुक्ल", "विजय कुमार शुक्ला", "विजय कुमार शुक्ल"]
+    # father known only as R. S. Shukla — first token starts with र, second with स/श (राम शंकर, राम सिंह, रवि शंकर ...)
+    father_regex: "^र\\S*\\s+[सश]\\S*(\\s+शुक्ल\\S*)?$"
+    father_loose_regex: "^र\\S*(\\s+\\S+)*\\s+शुक्ल\\S*$"
+    district_hint: "Lucknow"
+    prefixes: ["वि"]

@@ -1,0 +1,12 @@
+# Search priority hierarchy — evaluated top-down; anything unlisted comes last in catalog order.
+# Apply with:  bhulekh strategy -f strategy.yaml -t "start west UP, Amroha first"
+targets_order: [family, vijay]            # informational; both prefixes always run per village
+levels:
+  regions:   [west, central, east, bundelkhand]
+  districts: [Lucknow, Amroha, Moradabad, Rampur, Bijnor, Sambhal]
+  tehsils:   {Lucknow: [Sadar, Sarojini Nagar], Amroha: [Hasanpur, Amroha]}
+  villages:  {name_contains: [], codes_first: []}
+skip:        {districts: []}
+adaptive:
+  boost_neighbours_on_hit: true           # a Probable hit moves the rest of that tehsil, then district, to the front
+time_budget_min: 0
