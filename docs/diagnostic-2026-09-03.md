@@ -61,7 +61,31 @@ representative of a normal connection (the earlier session measured ~3 s page lo
 | + staggered opens | 34 | 0.25 /s | 6 | |
 | + readiness wait | 38 | 0.31 /s | 2 | one chakbandi village, one disabled input |
 | + fail-fast 5xx (pre-review) | 20 of 30 | 0.04 /s | 10 | tunnel stalls + same-URL reload bug (all 7 retries timed out) |
-| Final code, 12 villages | _run in progress at the time of this commit; result appended in a follow-up commit_ | | | |
+| Final code, 12 villages | 2 | 0.00 /s | 10 | **failed on environment**: first tab needed ~5 min; at 643–683 s every tab got HTTP 500 at once (tehsils, villages, fasli), and after the reload-and-retry no API call got any response within 45 s. Root page first byte was 13 s at the time (03:40 IST). |
+
+The final run therefore does **not** validate the load-quiet gate; it shows the retry path behaving as
+designed (fail fast on 5xx, one in-tab reload, then the village is recorded as an error and re-queued) while
+the portal was unavailable. Re-run `bhulekh doctor` and then `scan -d Amroha --limit 40` on a normal link
+during Indian daytime to get a representative number.
+
+`bhulekh doctor` (added in this branch) runs one tab through portal reachability, bundle download, page
+readiness, district → tehsil → village selection and one name search, printing PASS/FAIL and seconds per stage.
+Final run of `doctor -d Amroha` from this sandbox, after the failed scan above:
+
+| Stage | Result | Seconds |
+|---|---|---|
+| portal reachable (GET /) | PASS | 1.8 |
+| browser launched, search page ready (bundle, api/edata, JWT) | PASS | 327.4 (tunnel-bound bundle download) |
+| district list (75) | PASS | 1.2 |
+| select district Amroha | PASS | 1.4 |
+| tehsil list (4) | PASS | 0.3 |
+| select tehsil Amroha | PASS | 1.0 |
+| village list (272) | PASS | 3.1 |
+| select village Akbarpur Sakinya 117944 | PASS | 1.3 |
+| name search, prefix स (fast tier): 49 rows | PASS | 1.7 |
+
+Every stage after the bundle download runs in 0.3–3 s, which is the portal's normal behaviour; the scanner's
+per-village cost on a normal link is that same 5–8 s of interactions, not the 5-minute page load seen here.
 
 Hit found during the session: target T2 (`सादिक` s/o `साबिर अली`) in Amroha › Amroha › Haryana (118073),
 khata 906, 0.227 ha — categorised *probable*.

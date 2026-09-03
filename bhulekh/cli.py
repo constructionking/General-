@@ -160,6 +160,15 @@ def status():
                       f"{split_label(h['district'])[0]} › {h['village_label']} · {h['khata']} · {h['khatedar']} / {h['father']}")
 
 
+@app.command()
+def doctor(district: Optional[str] = typer.Option(None, "--district", "-d", help="district to test (default: first in the list)"),
+           prefix: str = typer.Option("स", help="on-screen-keyboard prefix for the test search")):
+    """End-to-end health check: portal, browser, page readiness, district/tehsil/village, one name search."""
+    from .doctor import run_doctor
+    cfg, _ = _ctx()
+    raise typer.Exit(code=0 if run_doctor(cfg, district, prefix) else 1)
+
+
 @app.command("reset-errors")
 def reset_errors_cmd(district: List[str] = typer.Option(None, "--district", "-d"),
                      include_skipped: bool = typer.Option(False, help="also re-queue villages the portal reported as having no khatauni")):

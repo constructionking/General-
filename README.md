@@ -17,6 +17,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## Everyday commands
 
 ```bash
+./bhulekh.sh doctor -d Amroha             # PASS/FAIL per stage with timings: portal, browser, page, selects, search
 ./bhulekh.sh catalog                      # fetch all 75 districts → tehsils → villages (one-off, cached)
 ./bhulekh.sh scan -d Amroha -d Lucknow    # scan districts (resumable; re-run to continue)
 ./bhulekh.sh scan --all                   # the whole state
