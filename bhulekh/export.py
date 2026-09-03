@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import os
-from typing import Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -42,10 +41,10 @@ def export_hits(store: Store, out_dir: str) -> str:
         ws.cell(row=ws.max_row, column=1).fill = fill.get(h["category"], PatternFill())
     _autosize(ws)
     cov = wb.create_sheet("coverage")
-    cov.append(["district", "villages", "done", "errors", "pending", "percent"])
+    cov.append(["district", "villages", "done", "errors", "skipped", "pending", "percent"])
     for r in store.coverage():
-        cov.append([split_label(r["district"])[0], r["total"], r["done"], r["errors"], r["pending"],
-                    round(100.0 * (r["done"] or 0) / max(r["total"], 1), 1)])
+        cov.append([split_label(r["district"])[0], r["total"], r["done"], r["errors"], r["skipped"], r["pending"],
+                    round(100.0 * ((r["done"] or 0) + (r["skipped"] or 0)) / max(r["total"], 1), 1)])
     _autosize(cov)
     path = os.path.join(out_dir, "hits.xlsx")
     wb.save(path)

@@ -8,7 +8,7 @@ from typing import Optional
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
-from .browser import CURRENT_FASLI, Portal, PortalError, Tab
+from .browser import CURRENT_FASLI, Portal, PortalDialog, PortalError, PortalServerError, Tab
 from .catalog import build_catalog, ensure_districts
 from .matcher import Target, all_prefixes, categorise, match_row, targets_from_config
 from .ratectl import RateController
@@ -40,6 +40,7 @@ class Scanner:
         self.claimed: set[str] = set()
         self.buffer: list[Village] = []
         self.done_count = 0
+        self.attempted = 0          # every village attempt, success or error (this is what --limit caps)
         self.hit_count = 0
         self.active = 0
         self.stop = False
@@ -49,7 +50,7 @@ class Scanner:
     # ---- queue ---------------------------------------------------------
     async def claim_next(self) -> Optional[Village]:
         async with self._lock:
-            if self.limit is not None and self.done_count + len(self.claimed) >= self.limit:
+            if self.limit is not None and self.attempted + len(self.claimed) >= self.limit:
                 return None
             if not self.buffer:
                 cand = self.store.next_pending(self.districts, 40, self.retries)
@@ -63,7 +64,14 @@ class Scanner:
     # ---- one village ---------------------------------------------------
     async def scan_village(self, tab: Tab, v: Village) -> int:
         await tab.refresh_if_stale()
-        await tab.set_location(v.district, v.tehsil, v.label, v.code)
+        try:
+            await tab.set_location(v.district, v.tehsil, v.label, v.code)
+        except PortalServerError as e:
+            # the portal rejects a tab's first calls now and then while other tabs are starting up
+            # (HTTP 500 with a fresh token): reload the page for a new token and try once more
+            self.store.event("retry", f"{v.code} {e}")
+            await tab.open_search()
+            await tab.set_location(v.district, v.tehsil, v.label, v.code)
         faslis = [CURRENT_FASLI]
         if self.old_fasli:
             faslis += [f for f in await tab.fasli_options() if f != CURRENT_FASLI]
@@ -121,6 +129,15 @@ class Scanner:
                     self.rate.record_success()
                     self.done_count += 1
                     self.hit_count += hits
+                    progress.update(task_id, advance=1)   # only finished villages move the bar
+                except PortalDialog as e:
+                    # the portal has no khatauni for this village (e.g. under chakbandi): record, don't retry
+                    self.store.mark_skipped(v.code, str(e))
+                    self.store.event("skipped", f"{v.code} {e}")
+                    self.rate.record_success()
+                    self.done_count += 1
+                    progress.update(task_id, advance=1)
+                    progress.console.print(f"[cyan]{v.district} › {v.label}: skipped — {e}[/cyan]")
                 except (PortalError, asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
                     msg = f"{type(e).__name__}: {str(e)[:160]}"
                     self.store.mark_error(v.code, msg)
@@ -133,9 +150,10 @@ class Scanner:
                     await asyncio.sleep(2.0)
                 finally:
                     self.active -= 1
+                    self.attempted += 1
                     self.claimed.discard(v.code)
-                progress.update(task_id, advance=1,
-                                description=f"tabs {self.active}/{self.rate.target} · hits {self.hit_count} · {time.time()-t0:.1f}s/village")
+                progress.update(task_id, description=f"tabs {self.active}/{self.rate.target} · hits {self.hit_count} · "
+                                                     f"errors {self.rate.total_errors} · {time.time()-t0:.1f}s/village")
         finally:
             if tab is not None:
                 await tab.close()

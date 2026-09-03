@@ -143,27 +143,39 @@ def status():
     cfg, store = _ctx()
     t = store.totals()
     rate, err = store.recent_rate()
-    console.print(f"villages {t['done']}/{t['villages']} scanned, {t['errors']} errors · rows {t['rows']} · "
+    console.print(f"villages {t['done']}/{t['villages']} scanned, {t['errors']} errors, {t['skipped']} skipped (no khatauni on portal) · "
+                  f"rows {t['rows']} · "
                   f"hits: [green]{t['probable']} probable[/green], [yellow]{t['less_probable']} less probable[/yellow] · "
                   f"extracts {t['extracts']} · last 2 min: {rate*60:.0f} villages/min, {err*60:.1f} errors/min")
-    tbl = Table("district", "villages", "done", "errors", "pending", "%")
+    tbl = Table("district", "villages", "done", "errors", "skipped", "pending", "%")
     for r in store.coverage():
-        if (r["done"] or 0) + (r["errors"] or 0) == 0:
+        if (r["done"] or 0) + (r["errors"] or 0) + (r["skipped"] or 0) == 0:
             continue
         tbl.add_row(split_label(r["district"])[0], str(r["total"]), str(r["done"] or 0), str(r["errors"] or 0),
-                    str(r["pending"] or 0), f"{100.0*(r['done'] or 0)/max(r['total'],1):.0f}")
+                    str(r["skipped"] or 0), str(r["pending"] or 0),
+                    f"{100.0*((r['done'] or 0) + (r['skipped'] or 0))/max(r['total'],1):.0f}")
     console.print(tbl)
     for h in store.hits()[:20]:
         console.print(f"  [{'green' if h['category']=='probable' else 'yellow'}]{h['category']}[/] {h['target']} "
                       f"{split_label(h['district'])[0]} › {h['village_label']} · {h['khata']} · {h['khatedar']} / {h['father']}")
 
 
+@app.command()
+def doctor(district: Optional[str] = typer.Option(None, "--district", "-d", help="district to test (default: first in the list)"),
+           prefix: str = typer.Option("स", help="on-screen-keyboard prefix for the test search")):
+    """End-to-end health check: portal, browser, page readiness, district/tehsil/village, one name search."""
+    from .doctor import run_doctor
+    cfg, _ = _ctx()
+    raise typer.Exit(code=0 if run_doctor(cfg, district, prefix) else 1)
+
+
 @app.command("reset-errors")
-def reset_errors_cmd(district: List[str] = typer.Option(None, "--district", "-d")):
+def reset_errors_cmd(district: List[str] = typer.Option(None, "--district", "-d"),
+                     include_skipped: bool = typer.Option(False, help="also re-queue villages the portal reported as having no khatauni")):
     """Put errored villages back in the queue."""
     from .catalog import resolve_districts
     cfg, store = _ctx()
-    store.reset_errors(resolve_districts(store, district) if district else None)
+    store.reset_errors(resolve_districts(store, district) if district else None, include_skipped=include_skipped)
     console.print("[green]errors reset[/green]")
 
 

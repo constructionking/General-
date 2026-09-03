@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS tehsils (
 CREATE TABLE IF NOT EXISTS villages (
   code TEXT PRIMARY KEY,           -- 6-digit village code from the label
   label TEXT, district TEXT, tehsil TEXT, name_en TEXT, name_hi TEXT,
-  status TEXT DEFAULT 'pending',   -- pending | done | error
+  status TEXT DEFAULT 'pending',   -- pending | done | error | skipped (portal says no records, reason in error)
   attempts INTEGER DEFAULT 0, error TEXT, scanned_at REAL, priority INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_villages_status ON villages(status, priority);
@@ -142,7 +142,7 @@ class Store:
             self.conn.commit()
 
     def next_pending(self, districts: Optional[list[str]], limit: int, max_attempts: int) -> list[Village]:
-        q = "SELECT code,label,district,tehsil,name_en,name_hi FROM villages WHERE status!='done' AND attempts<?"
+        q = "SELECT code,label,district,tehsil,name_en,name_hi FROM villages WHERE status IN ('pending','error') AND attempts<?"
         args: list = [max_attempts]
         if districts:
             q += " AND district IN (%s)" % ",".join("?" * len(districts))
@@ -167,13 +167,23 @@ class Store:
             self.conn.execute("UPDATE villages SET status='error', error=? WHERE code=?", (err[:500], code))
             self.conn.commit()
 
-    def reset_errors(self, districts: Optional[list[str]] = None):
+    def mark_skipped(self, code: str, reason: str):
+        """The portal has no khatauni for this village (dialog text kept as the reason); not retried."""
         with self._lock:
-            if districts:
-                self.conn.execute("UPDATE villages SET status='pending', attempts=0 WHERE status='error' AND district IN (%s)"
-                                  % ",".join("?" * len(districts)), districts)
-            else:
-                self.conn.execute("UPDATE villages SET status='pending', attempts=0 WHERE status='error'")
+            self.conn.execute("UPDATE villages SET status='skipped', error=?, scanned_at=? WHERE code=?",
+                              (reason[:500], time.time(), code))
+            self.conn.commit()
+
+    def reset_errors(self, districts: Optional[list[str]] = None, include_skipped: bool = False):
+        """Put errored villages back in the queue; include_skipped also re-queues portal-skipped ones."""
+        statuses = ("error", "skipped") if include_skipped else ("error",)
+        q = "UPDATE villages SET status='pending', attempts=0 WHERE status IN (%s)" % ",".join("?" * len(statuses))
+        args: list = list(statuses)
+        if districts:
+            q += " AND district IN (%s)" % ",".join("?" * len(districts))
+            args += districts
+        with self._lock:
+            self.conn.execute(q, args)
             self.conn.commit()
 
     # ---- rows / hits ---------------------------------------------------
@@ -249,7 +259,8 @@ class Store:
     def coverage(self) -> list[sqlite3.Row]:
         return list(self.conn.execute(
             "SELECT district, COUNT(*) AS total, SUM(status='done') AS done, SUM(status='error') AS errors, "
-            "SUM(status='pending') AS pending FROM villages GROUP BY district ORDER BY district"))
+            "SUM(status='skipped') AS skipped, SUM(status='pending') AS pending "
+            "FROM villages GROUP BY district ORDER BY district"))
 
     def coverage_tehsil(self, district: str) -> list[sqlite3.Row]:
         return list(self.conn.execute(
@@ -258,13 +269,14 @@ class Store:
 
     def totals(self) -> dict:
         r = self.conn.execute(
-            "SELECT COUNT(*) AS total, SUM(status='done') AS done, SUM(status='error') AS errors FROM villages").fetchone()
+            "SELECT COUNT(*) AS total, SUM(status='done') AS done, SUM(status='error') AS errors, "
+            "SUM(status='skipped') AS skipped FROM villages").fetchone()
         rows = self.conn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
         hp = self.conn.execute("SELECT COUNT(*) FROM hits WHERE category='probable'").fetchone()[0]
         hl = self.conn.execute("SELECT COUNT(*) FROM hits WHERE category='less_probable'").fetchone()[0]
         ex = self.conn.execute("SELECT COUNT(*) FROM extracts").fetchone()[0]
         return {"villages": r["total"] or 0, "done": r["done"] or 0, "errors": r["errors"] or 0,
-                "rows": rows, "probable": hp, "less_probable": hl, "extracts": ex}
+                "skipped": r["skipped"] or 0, "rows": rows, "probable": hp, "less_probable": hl, "extracts": ex}
 
     def recent_rate(self, window_s: float = 120.0) -> tuple[float, float]:
         """(villages/s, errors/s) over the last window."""

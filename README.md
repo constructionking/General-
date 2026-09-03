@@ -17,6 +17,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## Everyday commands
 
 ```bash
+./bhulekh.sh doctor -d Amroha             # PASS/FAIL per stage with timings: portal, browser, page, selects, search
 ./bhulekh.sh catalog                      # fetch all 75 districts → tehsils → villages (one-off, cached)
 ./bhulekh.sh scan -d Amroha -d Lucknow    # scan districts (resumable; re-run to continue)
 ./bhulekh.sh scan --all                   # the whole state
@@ -30,6 +31,20 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 Useful scan flags: `--max-tabs 24 --start-tabs 12` (concurrency), `--limit 50` (test run),
 `--old-fasli` (also search the older fasli band), `--reset-errors` (retry failed villages),
 `--render` (disable the fast in-page capture and read the rendered rows instead), `--headed`.
+
+## Environment overrides
+
+- `BHULEKH_CHROMIUM=/path/to/chrome` — drive an existing Chromium/Chrome instead of Playwright's downloaded one.
+- `BHULEKH_CHROMIUM_ARGS="--flag …"` — extra Chromium launch flags. Behind a TLS-intercepting proxy that cannot
+  finish a TLS 1.3 handshake with Chromium (symptom: `ERR_CONNECTION_RESET` on the first navigation while
+  `curl` works), use `--ssl-version-max=tls1.2`.
+- `HTTPS_PROXY` / `NO_PROXY` are passed to the browser automatically (Chromium ignores them on its own).
+
+Start-up is deliberately staggered: the first tab loads the search page alone, then at most three tabs load at a
+time. The portal serves its 7 MB Angular bundle with no `Cache-Control`, so Chromium would re-download it for
+every tab; the scanner fetches each JS/CSS asset once and answers later tabs from memory. Without these two
+measures a burst of half-loaded tabs saturated the link and produced 500s and timeouts on the first villages of
+every run.
 
 ## Search strategy (priority order)
 
