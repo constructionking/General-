@@ -143,15 +143,17 @@ def status():
     cfg, store = _ctx()
     t = store.totals()
     rate, err = store.recent_rate()
-    console.print(f"villages {t['done']}/{t['villages']} scanned, {t['errors']} errors · rows {t['rows']} · "
+    console.print(f"villages {t['done']}/{t['villages']} scanned, {t['errors']} errors, {t['skipped']} skipped (no khatauni on portal) · "
+                  f"rows {t['rows']} · "
                   f"hits: [green]{t['probable']} probable[/green], [yellow]{t['less_probable']} less probable[/yellow] · "
                   f"extracts {t['extracts']} · last 2 min: {rate*60:.0f} villages/min, {err*60:.1f} errors/min")
-    tbl = Table("district", "villages", "done", "errors", "pending", "%")
+    tbl = Table("district", "villages", "done", "errors", "skipped", "pending", "%")
     for r in store.coverage():
-        if (r["done"] or 0) + (r["errors"] or 0) == 0:
+        if (r["done"] or 0) + (r["errors"] or 0) + (r["skipped"] or 0) == 0:
             continue
         tbl.add_row(split_label(r["district"])[0], str(r["total"]), str(r["done"] or 0), str(r["errors"] or 0),
-                    str(r["pending"] or 0), f"{100.0*(r['done'] or 0)/max(r['total'],1):.0f}")
+                    str(r["skipped"] or 0), str(r["pending"] or 0),
+                    f"{100.0*((r['done'] or 0) + (r['skipped'] or 0))/max(r['total'],1):.0f}")
     console.print(tbl)
     for h in store.hits()[:20]:
         console.print(f"  [{'green' if h['category']=='probable' else 'yellow'}]{h['category']}[/] {h['target']} "

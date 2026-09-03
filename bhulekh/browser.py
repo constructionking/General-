@@ -9,6 +9,7 @@ this only reduces rendering work in our own browser.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright, Time
 
 SEARCH_ROUTE = "#/khatauni_rtk"
 CURRENT_FASLI = "999"
+PAGE_LOAD_TIMEOUT_MS = 90_000    # first load pulls a ~3 MB Angular bundle; slow links need well over 20 s
+OPEN_CONCURRENCY = 3             # tabs allowed to load the search page at the same time (after the first)
 TAB_MAX_AGE_S = 18 * 60          # portal JWT lives 25 min; reopen the page well before that
 ROW_RE = re.compile(
     r"^\s*(?P<khata>.+?)\s*:\s*(?P<khatedar>.+?)\s*:\s*(?P<father>.+?)\s*:\s*(?P<code>\d{14,18})\s*:\s*\((?P<area>[\d.]+)\s*(?:हे[०0]?|ha)?\s*\)\s*$"
@@ -57,6 +60,11 @@ class PortalError(RuntimeError):
     pass
 
 
+class PortalDialog(PortalError):
+    """The portal answered with a dialog instead of data, e.g. 'यह गाँव चकबंदी में है।' (village under
+    consolidation — no khatauni available). A statement about the village, not a transient failure."""
+
+
 @dataclass
 class Row:
     khata: str
@@ -94,6 +102,18 @@ def row_from_api(d: dict) -> Row:
                f"{khata} : {name} : {father} : {d.get('unique_code')} : ({d.get('area')} हे०)")
 
 
+def _env_proxy() -> Optional[dict]:
+    """Chromium does not read HTTPS_PROXY on its own; pass it through Playwright's proxy option."""
+    server = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if not server:
+        return None
+    proxy = {"server": server}
+    bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+    if bypass:
+        proxy["bypass"] = bypass
+    return proxy
+
+
 def _label_regex(text: str) -> re.Pattern:
     """Exact label match that tolerates the portal's inconsistent whitespace."""
     parts = [re.escape(p) for p in text.split()]
@@ -108,15 +128,31 @@ class Portal:
         self._pw: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
+        self._warm = False                      # first page load done (bundles now in the asset cache)
+        self._first_lock: Optional[asyncio.Lock] = None
+        self._open_gate: Optional[asyncio.Semaphore] = None
+        # the portal serves its 7 MB Angular bundle with no Cache-Control, so Chromium re-downloads it for
+        # every tab; we fetch each JS/CSS asset once and answer later tabs from memory
+        self._assets: dict[str, tuple[int, dict, bytes]] = {}
+        self._asset_locks: dict[str, asyncio.Lock] = {}
 
     async def __aenter__(self):
+        self._first_lock = asyncio.Lock()
+        self._open_gate = asyncio.Semaphore(OPEN_CONCURRENCY)
         self._pw = await async_playwright().start()
-        self.browser = await self._pw.chromium.launch(headless=self.headless)
+        # BHULEKH_CHROMIUM=/path/to/chrome uses an existing Chromium instead of Playwright's own download;
+        # BHULEKH_CHROMIUM_ARGS="--flag1 --flag2" appends launch flags (e.g. --ssl-version-max=tls1.2
+        # behind a TLS-intercepting proxy that cannot negotiate TLS 1.3 with Chromium)
+        exe = os.environ.get("BHULEKH_CHROMIUM") or None
+        args = (os.environ.get("BHULEKH_CHROMIUM_ARGS") or "").split()
+        self.browser = await self._pw.chromium.launch(headless=self.headless, executable_path=exe, args=args,
+                                                      proxy=_env_proxy())
         self.context = await self.browser.new_context(
             viewport={"width": 1280, "height": 900}, locale="hi-IN",
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 bhulekh-finder/0.1"))
         await self.context.route(re.compile(r"\.(png|jpe?g|gif|woff2?|ttf|svg)(\?.*)?$"), lambda r: r.abort())
+        await self.context.route(re.compile(re.escape(self.base_url) + r"[^?]*\.(js|css)(\?.*)?$"), self._serve_asset)
         if self.headless:
             await self.context.add_init_script(QUIET_HOOK)
         if self.capture:
@@ -133,11 +169,43 @@ class Portal:
             if self._pw:
                 await self._pw.stop()
 
+    async def _serve_asset(self, route, request):
+        """Route handler: first request for a static asset fetches it, everyone else gets the cached copy."""
+        if request.method != "GET":
+            await route.continue_()
+            return
+        key = request.url
+        ent = self._assets.get(key)
+        if ent is None:
+            lock = self._asset_locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                ent = self._assets.get(key)
+                if ent is None:
+                    resp = await route.fetch()
+                    if resp.status != 200:
+                        await route.fulfill(response=resp)
+                        return
+                    body = await resp.body()
+                    ctype = resp.headers.get("content-type", "application/octet-stream")
+                    ent = (resp.status, {"content-type": ctype}, body)
+                    self._assets[key] = ent
+        await route.fulfill(status=ent[0], headers=ent[1], body=ent[2])
+
     async def new_tab(self) -> "Tab":
+        """Open a tab on the search screen. The very first load runs alone so the Angular bundle lands in
+        the asset cache before other tabs start; later opens are limited to OPEN_CONCURRENCY at a time, which
+        stops a burst of half-loaded pages hitting the portal with 500s/timeouts at start-up."""
         page = await self.context.new_page()
         page.set_default_timeout(20000)
         tab = Tab(self, page)
-        await tab.open_search()
+        if not self._warm:
+            async with self._first_lock:
+                if not self._warm:
+                    await tab.open_search()
+                    self._warm = True
+                    return tab
+        async with self._open_gate:
+            await tab.open_search()
         return tab
 
 
@@ -156,13 +224,18 @@ class Tab:
     # ---- navigation ----------------------------------------------------
     async def open_search(self):
         p = self.page
-        await p.goto(self.portal.base_url + SEARCH_ROUTE, wait_until="domcontentloaded")
-        try:
-            await p.wait_for_selector("#districtSelect", timeout=15000)
-        except PWTimeout:
-            await p.goto(self.portal.base_url, wait_until="domcontentloaded")
-            await p.get_by_text("खतौनी (अधिकार अभिलेख) की नक़ल देखे").first.click()
-            await p.wait_for_selector("#districtSelect", timeout=15000)
+        # the page is usable only once its own start-up calls are back: the district list (api/edata) and the
+        # JWT the portal stores in sessionStorage — a search fired before that gets a 500 or an empty dropdown
+        async with p.expect_response(lambda r: "api/edata" in r.url, timeout=PAGE_LOAD_TIMEOUT_MS) as edata:
+            await p.goto(self.portal.base_url + SEARCH_ROUTE, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+            try:
+                await p.wait_for_selector("#districtSelect", timeout=30000)
+            except PWTimeout:
+                await p.goto(self.portal.base_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+                await p.get_by_text("खतौनी (अधिकार अभिलेख) की नक़ल देखे").first.click()
+                await p.wait_for_selector("#districtSelect", timeout=30000)
+        await edata.value
+        await p.wait_for_function("() => !!sessionStorage.getItem('jwtToken')", timeout=15000)
         self.district = self.tehsil = self.village_code = None
         self.fasli = CURRENT_FASLI
         self.opened_at = time.time()
@@ -183,9 +256,22 @@ class Tab:
     async def _open_dropdown(self, sel_id: str):
         p = self.page
         await self.dismiss_dialog()
-        await p.keyboard.press("Escape")
-        await p.click(f"#{sel_id} .ng-select-container")
-        await p.wait_for_selector(".ng-dropdown-panel .ng-option", timeout=10000)
+        # ng-select stays disabled until the previous step's option list has landed; a click on a disabled
+        # control opens nothing, so wait for it to be enabled before clicking
+        await p.wait_for_selector(f"#{sel_id}:not(.ng-select-disabled)", timeout=30000)
+        for attempt in range(2):
+            await p.keyboard.press("Escape")
+            await p.click(f"#{sel_id} .ng-select-container")
+            try:
+                await p.wait_for_selector(".ng-dropdown-panel .ng-option", timeout=10000 if attempt == 0 else 25000)
+                return
+            except PWTimeout:
+                if attempt:
+                    diag = await p.evaluate(
+                        """(id) => { const e = document.querySelector('#' + id);
+                                     return {cls: e ? e.className : null, panels: document.querySelectorAll('.ng-dropdown-panel').length,
+                                             placeholder: e ? e.textContent.replace(/\\s+/g, ' ').trim().slice(0, 40) : null}; }""", sel_id)
+                    raise PortalError(f"dropdown #{sel_id} showed no options ({diag})")
 
     async def ng_options(self, sel_id: str) -> list[str]:
         await self._open_dropdown(sel_id)
@@ -202,6 +288,8 @@ class Tab:
             # typing into the search box opens the panel with only the matching options rendered
             # (focus + fill, no click: a click would first render the entire option list)
             await p.keyboard.press("Escape")
+            # ng-select keeps the input disabled until the option list from the previous step has landed
+            await p.wait_for_selector(f"#{sel_id} input[type=text]:not([disabled])", timeout=30000)
             inp = p.locator(f"#{sel_id} input[type=text]")
             await inp.focus()
             await inp.fill(typed)
@@ -213,11 +301,22 @@ class Tab:
         except PWTimeout:
             await p.keyboard.press("Escape")
             raise PortalError(f"option not found in #{sel_id}: {text}")
-        if wait_url:
-            async with p.expect_response(lambda r: wait_url in r.url, timeout=45000):
-                await target.first.click()
-        else:
+        if not wait_url:
             await target.first.click()
+            return
+        # wait for the follow-up API call — or for a portal dialog that replaces it (e.g. village under chakbandi)
+        waiter = asyncio.ensure_future(p.wait_for_event("response", lambda r: wait_url in r.url, timeout=45000))
+        try:
+            await target.first.click()
+            while not waiter.done():
+                text = await self.dismiss_dialog()
+                if text:
+                    raise PortalDialog(text[:160])
+                await asyncio.sleep(0.2)
+            await waiter   # re-raises the 45 s timeout if the call never came
+        finally:
+            if not waiter.done():
+                waiter.cancel()
 
     # ---- location ------------------------------------------------------
     async def set_district(self, label: str):
@@ -321,9 +420,16 @@ class Tab:
         capture = self.portal.capture
         seq_before = await p.evaluate("() => window.__bhu ? window.__bhu.seq : -1") if capture else -1
 
-        async with p.expect_response(lambda r: "api/uniqueCoden" in r.url, timeout=timeout_s * 1000) as resp_info:
-            await p.click(".contact-page button.btn-primary")
-        resp = await resp_info.value
+        for attempt in range(2):
+            async with p.expect_response(lambda r: "api/uniqueCoden" in r.url, timeout=timeout_s * 1000) as resp_info:
+                await p.click(".contact-page button.btn-primary")
+            resp = await resp_info.value
+            if resp.status < 500 or attempt:
+                break
+            # a fresh tab's first search sometimes gets a 500; one in-tab retry is far cheaper than a new tab
+            await asyncio.sleep(2.0)
+            await self.dismiss_dialog()
+            seq_before = await p.evaluate("() => window.__bhu ? window.__bhu.seq : -1") if capture else -1
         if resp.status >= 500:
             raise PortalError(f"server error {resp.status} on uniqueCoden (session token may have expired)")
         if resp.status == 429:
