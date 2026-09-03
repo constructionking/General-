@@ -8,7 +8,7 @@ from typing import Optional
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
-from .browser import CURRENT_FASLI, Portal, PortalDialog, PortalError, Tab
+from .browser import CURRENT_FASLI, Portal, PortalDialog, PortalError, PortalServerError, Tab
 from .catalog import build_catalog, ensure_districts
 from .matcher import Target, all_prefixes, categorise, match_row, targets_from_config
 from .ratectl import RateController
@@ -66,9 +66,7 @@ class Scanner:
         await tab.refresh_if_stale()
         try:
             await tab.set_location(v.district, v.tehsil, v.label, v.code)
-        except PortalError as e:
-            if "server error 5" not in str(e):
-                raise
+        except PortalServerError as e:
             # the portal rejects a tab's first calls now and then while other tabs are starting up
             # (HTTP 500 with a fresh token): reload the page for a new token and try once more
             self.store.event("retry", f"{v.code} {e}")

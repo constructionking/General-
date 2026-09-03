@@ -174,13 +174,16 @@ class Store:
                               (reason[:500], time.time(), code))
             self.conn.commit()
 
-    def reset_errors(self, districts: Optional[list[str]] = None):
+    def reset_errors(self, districts: Optional[list[str]] = None, include_skipped: bool = False):
+        """Put errored villages back in the queue; include_skipped also re-queues portal-skipped ones."""
+        statuses = ("error", "skipped") if include_skipped else ("error",)
+        q = "UPDATE villages SET status='pending', attempts=0 WHERE status IN (%s)" % ",".join("?" * len(statuses))
+        args: list = list(statuses)
+        if districts:
+            q += " AND district IN (%s)" % ",".join("?" * len(districts))
+            args += districts
         with self._lock:
-            if districts:
-                self.conn.execute("UPDATE villages SET status='pending', attempts=0 WHERE status='error' AND district IN (%s)"
-                                  % ",".join("?" * len(districts)), districts)
-            else:
-                self.conn.execute("UPDATE villages SET status='pending', attempts=0 WHERE status='error'")
+            self.conn.execute(q, args)
             self.conn.commit()
 
     # ---- rows / hits ---------------------------------------------------

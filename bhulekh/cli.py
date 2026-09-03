@@ -161,11 +161,12 @@ def status():
 
 
 @app.command("reset-errors")
-def reset_errors_cmd(district: List[str] = typer.Option(None, "--district", "-d")):
+def reset_errors_cmd(district: List[str] = typer.Option(None, "--district", "-d"),
+                     include_skipped: bool = typer.Option(False, help="also re-queue villages the portal reported as having no khatauni")):
     """Put errored villages back in the queue."""
     from .catalog import resolve_districts
     cfg, store = _ctx()
-    store.reset_errors(resolve_districts(store, district) if district else None)
+    store.reset_errors(resolve_districts(store, district) if district else None, include_skipped=include_skipped)
     console.print("[green]errors reset[/green]")
 
 

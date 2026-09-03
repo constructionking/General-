@@ -9,9 +9,9 @@ extracts_dir: "output/extracts"
 old_fasli: false
 
 # when a single-letter search returns at least this many rows, re-run it with every two-character
-# prefix and merge (guards against any server-side result cap). A single search has been seen to return
-# 1,023 rows uncapped (Amroha › Maumayachak), so the threshold sits well above that: expanding costs
-# ~50 extra searches (≈2 min) per village and the matra keys return far fewer rows than the plain letter.
+# prefix and merge (guards against any server-side result cap). Single searches have returned 1,023 and
+# 1,604 rows in Amroha (so there is no cap at 1,000 or 1,024); the threshold sits well above that because
+# expanding costs ~50 extra searches (≈2 min) per village and matra keys return far fewer rows than the letter.
 expand_above_rows: 5000
 
 concurrency:

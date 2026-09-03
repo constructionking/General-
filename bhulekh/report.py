@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import html
 import os
-import time
 from collections import Counter
 from datetime import datetime
 
@@ -41,6 +40,7 @@ def build_report(store: Store, out_dir: str, live: bool = False) -> tuple[str, s
     md.append(f"| Villages in catalog | {tot['villages']} |")
     md.append(f"| Villages scanned | {tot['done']} ({100.0*tot['done']/max(tot['villages'],1):.1f}%) |")
     md.append(f"| Villages with errors (unscanned) | {tot['errors']} |")
+    md.append(f"| Villages skipped (portal has no khatauni, e.g. under chakbandi) | {tot['skipped']} |")
     md.append(f"| Khatedar rows collected | {tot['rows']} |")
     md.append(f"| **Probable hits** | **{tot['probable']}** |")
     md.append(f"| Less probable hits | {tot['less_probable']} |")
@@ -90,10 +90,11 @@ def build_report(store: Store, out_dir: str, live: bool = False) -> tuple[str, s
         md.append("_No clusters yet._")
     md.append("")
     md.append("## Coverage (how much of the state has actually been searched)\n")
-    md.append("| District | Villages | Scanned | Errors | Pending | % |\n|---|---|---|---|---|---|")
+    md.append("| District | Villages | Scanned | Errors | Skipped | Pending | % |\n|---|---|---|---|---|---|---|")
     for r in cov:
-        md.append(f"| {split_label(r['district'])[0]} | {r['total']} | {r['done'] or 0} | {r['errors'] or 0} | {r['pending'] or 0} | "
-                  f"{100.0*(r['done'] or 0)/max(r['total'],1):.0f}% |")
+        md.append(f"| {split_label(r['district'])[0]} | {r['total']} | {r['done'] or 0} | {r['errors'] or 0} | "
+                  f"{r['skipped'] or 0} | {r['pending'] or 0} | "
+                  f"{100.0*((r['done'] or 0) + (r['skipped'] or 0))/max(r['total'],1):.0f}% |")
     md.append("")
     md.append("_A district with pending or errored villages is not fully searched; 'not found' there is not final._\n")
 

@@ -14,12 +14,14 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import unquote, urlsplit
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PWTimeout, async_playwright
 
 SEARCH_ROUTE = "#/khatauni_rtk"
 CURRENT_FASLI = "999"
-PAGE_LOAD_TIMEOUT_MS = 90_000    # first load pulls a ~3 MB Angular bundle; slow links need well over 20 s
+# first load pulls a 7 MB Angular bundle; slow links need well over 20 s. BHULEKH_PAGE_TIMEOUT_S overrides.
+PAGE_LOAD_TIMEOUT_MS = int(float(os.environ.get("BHULEKH_PAGE_TIMEOUT_S", "90")) * 1000)
 OPEN_CONCURRENCY = 3             # tabs allowed to load the search page at the same time (after the first)
 TAB_MAX_AGE_S = 18 * 60          # portal JWT lives 25 min; reopen the page well before that
 ROW_RE = re.compile(
@@ -65,6 +67,19 @@ class PortalDialog(PortalError):
     consolidation — no khatauni available). A statement about the village, not a transient failure."""
 
 
+class PortalServerError(PortalError):
+    """The portal answered 5xx. Seen on a fresh tab's first calls while other tabs start up; retryable."""
+
+
+NO_RECORDS_MARKERS = ("चकबंदी", "No Data", "नहीं", "उपलब्ध", "No Record", "no record")
+
+
+def dialog_means_no_records(text: str) -> bool:
+    """True for portal dialogs that state the village has no searchable khatauni (skip, don't retry);
+    False for anything else (session/maintenance/error popups), which is retried like any failure."""
+    return any(m in text for m in NO_RECORDS_MARKERS)
+
+
 @dataclass
 class Row:
     khata: str
@@ -102,13 +117,20 @@ def row_from_api(d: dict) -> Row:
                f"{khata} : {name} : {father} : {d.get('unique_code')} : ({d.get('area')} हे०)")
 
 
-def _env_proxy() -> Optional[dict]:
-    """Chromium does not read HTTPS_PROXY on its own; pass it through Playwright's proxy option."""
-    server = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-    if not server:
+def _env_proxy(env: Optional[dict] = None) -> Optional[dict]:
+    """Chromium does not read HTTPS_PROXY on its own; pass it through Playwright's proxy option.
+    Credentials in the URL (http://user:pass@host:port) go into Playwright's username/password fields,
+    because Chromium ignores userinfo in --proxy-server."""
+    env = os.environ if env is None else env
+    raw = env.get("HTTPS_PROXY") or env.get("https_proxy")
+    if not raw:
         return None
-    proxy = {"server": server}
-    bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+    u = urlsplit(raw if "://" in raw else "http://" + raw)
+    proxy = {"server": f"{u.scheme}://{u.hostname}" + (f":{u.port}" if u.port else "")}
+    if u.username:
+        proxy["username"] = unquote(u.username)
+        proxy["password"] = unquote(u.password or "")
+    bypass = env.get("NO_PROXY") or env.get("no_proxy")
     if bypass:
         proxy["bypass"] = bypass
     return proxy
@@ -135,10 +157,30 @@ class Portal:
         # every tab; we fetch each JS/CSS asset once and answer later tabs from memory
         self._assets: dict[str, tuple[int, dict, bytes]] = {}
         self._asset_locks: dict[str, asyncio.Lock] = {}
+        # API calls made while another tab is loading the search page (minting its token) come back as
+        # 500s; tabs therefore hold their next step until no page load is in flight
+        self._loads = 0
+        self._idle: Optional[asyncio.Event] = None
+
+    def _load_begin(self):
+        self._loads += 1
+        self._idle.clear()
+
+    def _load_end(self):
+        self._loads -= 1
+        if self._loads <= 0:
+            self._loads = 0
+            self._idle.set()
+
+    async def wait_idle(self):
+        """Block while any tab is loading the search page."""
+        await self._idle.wait()
 
     async def __aenter__(self):
         self._first_lock = asyncio.Lock()
         self._open_gate = asyncio.Semaphore(OPEN_CONCURRENCY)
+        self._idle = asyncio.Event()
+        self._idle.set()
         self._pw = await async_playwright().start()
         # BHULEKH_CHROMIUM=/path/to/chrome uses an existing Chromium instead of Playwright's own download;
         # BHULEKH_CHROMIUM_ARGS="--flag1 --flag2" appends launch flags (e.g. --ssl-version-max=tls1.2
@@ -183,33 +225,32 @@ class Portal:
                 if ent is None:
                     try:
                         resp = await route.fetch(timeout=PAGE_LOAD_TIMEOUT_MS)
+                        if resp.status != 200:
+                            await route.fulfill(response=resp)
+                            return
+                        body = await resp.body()
                     except Exception:  # noqa: BLE001 — proxy/tunnel stall: let the browser try on its own
-                        await route.continue_()
+                        try:
+                            await route.continue_()
+                        except Exception:  # noqa: BLE001 — route already handled / page gone
+                            pass
                         return
-                    if resp.status != 200:
-                        await route.fulfill(response=resp)
-                        return
-                    body = await resp.body()
                     ctype = resp.headers.get("content-type", "application/octet-stream")
                     ent = (resp.status, {"content-type": ctype}, body)
                     self._assets[key] = ent
         await route.fulfill(status=ent[0], headers=ent[1], body=ent[2])
 
     async def new_tab(self) -> "Tab":
-        """Open a tab on the search screen. The very first load runs alone so the Angular bundle lands in
-        the asset cache before other tabs start; later opens are limited to OPEN_CONCURRENCY at a time, which
-        stops a burst of half-loaded pages hitting the portal with 500s/timeouts at start-up."""
+        """Open a tab on the search screen (page loads are gated in Tab.open_search). A page whose first
+        load fails is closed here, because the caller never receives the Tab and could not close it."""
         page = await self.context.new_page()
         page.set_default_timeout(20000)
         tab = Tab(self, page)
-        if not self._warm:
-            async with self._first_lock:
-                if not self._warm:
-                    await tab.open_search()
-                    self._warm = True
-                    return tab
-        async with self._open_gate:
+        try:
             await tab.open_search()
+        except BaseException:
+            await tab.close()
+            raise
         return tab
 
 
@@ -227,9 +268,32 @@ class Tab:
 
     # ---- navigation ----------------------------------------------------
     async def open_search(self):
+        """(Re)load the search screen. Every page load goes through the portal's gate: the very first load
+        runs alone so the Angular bundle lands in the asset cache, later loads (new tabs, stale-tab refreshes,
+        retries after a 5xx) are limited to OPEN_CONCURRENCY at a time, which stops a burst of half-loaded
+        pages hitting the portal with 500s/timeouts."""
+        portal = self.portal
+        if not portal._warm:
+            async with portal._first_lock:
+                if not portal._warm:
+                    await self._load_search()
+                    portal._warm = True
+                    return
+        async with portal._open_gate:
+            portal._load_begin()
+            try:
+                await self._load_search()
+            finally:
+                portal._load_end()
+
+    async def _load_search(self):
         p = self.page
         # the page is usable only once its own start-up calls are back: the district list (api/edata) and the
         # JWT the portal stores in sessionStorage — a search fired before that gets a 500 or an empty dropdown
+        if p.url.startswith(self.portal.base_url):
+            # a goto to the same hash URL is a same-document navigation for Angular's router: nothing reloads
+            # and api/edata never fires. Leave the origin first so the next goto is a full document load.
+            await p.goto("about:blank", wait_until="domcontentloaded")
         async with p.expect_response(lambda r: "api/edata" in r.url, timeout=PAGE_LOAD_TIMEOUT_MS) as edata:
             await p.goto(self.portal.base_url + SEARCH_ROUTE, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
             try:
@@ -308,27 +372,33 @@ class Tab:
         if not wait_url:
             await target.first.click()
             return
-        # wait for the follow-up API call — or for a portal dialog that replaces it (e.g. village under chakbandi)
+        # race the follow-up API call against a portal dialog that replaces it (e.g. village under chakbandi)
         waiter = asyncio.ensure_future(p.wait_for_event("response", lambda r: wait_url in r.url, timeout=45000))
+        dialog = asyncio.ensure_future(p.wait_for_selector(".swal2-popup.swal2-show", timeout=45000))
         try:
             await target.first.click()
-            while not waiter.done():
-                text = await self.dismiss_dialog()
-                if text:
-                    raise PortalDialog(text[:160])
-                await asyncio.sleep(0.2)
+            done, _ = await asyncio.wait({waiter, dialog}, return_when=asyncio.FIRST_COMPLETED)
+            if dialog in done and dialog.exception() is None:
+                shown = (await self.dismiss_dialog() or "")[:160]
+                if dialog_means_no_records(shown):
+                    raise PortalDialog(shown)
+                raise PortalError("portal dialog: " + shown)
             resp = await waiter   # re-raises the 45 s timeout if the call never came
             if resp.status >= 500:
-                # the dropdown would stay disabled for good; fail now so the village is retried on a fresh tab
-                raise PortalError(f"server error {resp.status} on {wait_url.split('/')[-1]} (session token rejected)")
+                # the dropdown would stay disabled for good; fail now so the step is retried with a fresh token
+                raise PortalServerError(f"server error {resp.status} on {wait_url.split('/')[-1]}")
         finally:
-            if not waiter.done():
-                waiter.cancel()
+            for fut in (waiter, dialog):
+                if not fut.done():
+                    fut.cancel()
+                elif not fut.cancelled():
+                    fut.exception()   # consume, so a lost race does not log "exception was never retrieved"
 
     # ---- location ------------------------------------------------------
     async def set_district(self, label: str):
         if self.district == label:
             return
+        await self.portal.wait_idle()
         await self.ng_select("districtSelect", label, wait_url="api/tehsils")
         await asyncio.sleep(0.15)
         self.district, self.tehsil, self.village_code = label, None, None
@@ -336,6 +406,7 @@ class Tab:
     async def set_tehsil(self, label: str):
         if self.tehsil == label:
             return
+        await self.portal.wait_idle()
         await self.ng_select("tehsilSelect", label, wait_url="api/villages")
         await asyncio.sleep(0.15)
         self.tehsil, self.village_code = label, None
@@ -343,6 +414,7 @@ class Tab:
     async def set_village(self, label: str, code: str):
         if self.village_code == code:
             return
+        await self.portal.wait_idle()
         await self.ng_select("villageSelect", label, wait_url="api/fasli", typed=code)
         await asyncio.sleep(0.15)
         self.village_code = code
@@ -423,6 +495,7 @@ class Tab:
     async def search_name(self, prefix, timeout_s: float = 45.0) -> list[Row]:
         """Run 'खातेदार के नाम द्वारा खोजें' for a Devanagari prefix and return parsed rows."""
         p = self.page
+        await self.portal.wait_idle()
         await self.type_prefix(prefix)
         capture = self.portal.capture
         seq_before = await p.evaluate("() => window.__bhu ? window.__bhu.seq : -1") if capture else -1
@@ -438,7 +511,7 @@ class Tab:
             await self.dismiss_dialog()
             seq_before = await p.evaluate("() => window.__bhu ? window.__bhu.seq : -1") if capture else -1
         if resp.status >= 500:
-            raise PortalError(f"server error {resp.status} on uniqueCoden (session token may have expired)")
+            raise PortalServerError(f"server error {resp.status} on uniqueCoden")
         if resp.status == 429:
             raise PortalError("rate limited (429)")
         if resp.status >= 400:
@@ -467,7 +540,7 @@ class Tab:
                     late = await p.evaluate("(s) => (window.__bhu && window.__bhu.seq > s) ? window.__bhu.rows : null", seq_before)
                     if late:
                         return [row_from_api(d) for d in late]
-                if "No Data" in text or "नहीं" in text:
+                if dialog_means_no_records(text):
                     return []
                 raise PortalError("portal dialog: " + text[:120])
             if state["rows"]:
