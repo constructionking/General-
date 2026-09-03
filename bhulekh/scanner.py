@@ -64,7 +64,16 @@ class Scanner:
     # ---- one village ---------------------------------------------------
     async def scan_village(self, tab: Tab, v: Village) -> int:
         await tab.refresh_if_stale()
-        await tab.set_location(v.district, v.tehsil, v.label, v.code)
+        try:
+            await tab.set_location(v.district, v.tehsil, v.label, v.code)
+        except PortalError as e:
+            if "server error 5" not in str(e):
+                raise
+            # the portal rejects a tab's first calls now and then while other tabs are starting up
+            # (HTTP 500 with a fresh token): reload the page for a new token and try once more
+            self.store.event("retry", f"{v.code} {e}")
+            await tab.open_search()
+            await tab.set_location(v.district, v.tehsil, v.label, v.code)
         faslis = [CURRENT_FASLI]
         if self.old_fasli:
             faslis += [f for f in await tab.fasli_options() if f != CURRENT_FASLI]

@@ -181,7 +181,11 @@ class Portal:
             async with lock:
                 ent = self._assets.get(key)
                 if ent is None:
-                    resp = await route.fetch()
+                    try:
+                        resp = await route.fetch(timeout=PAGE_LOAD_TIMEOUT_MS)
+                    except Exception:  # noqa: BLE001 — proxy/tunnel stall: let the browser try on its own
+                        await route.continue_()
+                        return
                     if resp.status != 200:
                         await route.fulfill(response=resp)
                         return
@@ -313,7 +317,10 @@ class Tab:
                 if text:
                     raise PortalDialog(text[:160])
                 await asyncio.sleep(0.2)
-            await waiter   # re-raises the 45 s timeout if the call never came
+            resp = await waiter   # re-raises the 45 s timeout if the call never came
+            if resp.status >= 500:
+                # the dropdown would stay disabled for good; fail now so the village is retried on a fresh tab
+                raise PortalError(f"server error {resp.status} on {wait_url.split('/')[-1]} (session token rejected)")
         finally:
             if not waiter.done():
                 waiter.cancel()
