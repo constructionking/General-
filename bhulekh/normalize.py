@@ -33,6 +33,7 @@ _SPACE_RE = re.compile(r"\s+")
 _VOWEL_LEN = str.maketrans({
     "ी": "ि", "ू": "ु", "ै": "े", "ौ": "ो", "ँ": "ं", "ॉ": "ो", "ऐ": "ए", "औ": "ओ",
     "ई": "इ", "ऊ": "उ",
+    "व": "ब",   # व/ब are used interchangeably in UP revenue records (साविर = साबिर)
 })
 
 

@@ -211,6 +211,26 @@ class Store:
                 (row_id, target, name_score, father_score, score, category, reasoning, time.time()))
             self.conn.commit()
 
+    def all_rows(self) -> list[sqlite3.Row]:
+        return list(self.conn.execute(
+            "SELECT r.id, r.khatedar, r.father, r.village_code, v.district, v.tehsil, v.name_en "
+            "FROM rows r JOIN villages v ON v.code=r.village_code ORDER BY r.village_code"))
+
+    def replace_hits(self, hits: list[tuple]):
+        """Atomically replace the hits table. hits = [(row_id, target, name_score, father_score, score, category, reasoning)].
+        Uses BEGIN IMMEDIATE so the busy timeout applies while other processes are writing."""
+        with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute("DELETE FROM hits")
+                self.conn.executemany(
+                    "INSERT INTO hits(row_id,target,name_score,father_score,score,category,reasoning,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?)", [(*h, time.time()) for h in hits])
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+
     def hits(self, category: Optional[str] = None) -> list[sqlite3.Row]:
         q = ("SELECT h.*, r.village_code, r.prefix, r.fasli, r.khata, r.khatedar, r.father, r.unique_code, r.area, "
              "v.label AS village_label, v.district, v.tehsil, v.name_en AS village_en, v.name_hi AS village_hi, "

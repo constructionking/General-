@@ -15,6 +15,7 @@ from .normalize import aliases, clean, skeleton, tokens
 
 HIT_MIN = 80          # both names must reach this
 PROBABLE_MIN = 90     # both names must reach this AND no conflicting tokens
+FIRST_TOKEN_MIN = 85  # the given name itself must match: विनय is not विजय even if the surname matches
 
 
 @dataclass
@@ -54,8 +55,12 @@ def _best(value: str, variants: list[str]) -> tuple[float, str]:
         sk = skeleton(alias)
         if not sk:
             continue
+        first = sk.split()[0]
         for v in variants:
-            s = fuzz.ratio(sk, skeleton(v))
+            skv = skeleton(v)
+            if fuzz.ratio(first, skv.split()[0]) < FIRST_TOKEN_MIN:
+                continue
+            s = fuzz.ratio(sk, skv)
             if s > best:
                 best, best_v = s, v
     return best, best_v

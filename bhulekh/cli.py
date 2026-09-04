@@ -165,6 +165,28 @@ def status():
                       f"{split_label(h['district'])[0]} › {h['village_label']} · {h['khata']} · {h['khatedar']} / {h['father']}")
 
 
+@app.command()
+def rematch():
+    """Re-score every stored khatedar row against the targets in config.yaml (no rescan needed)."""
+    from .matcher import categorise, match_row, targets_from_config
+    from .scanner import FAMILY_TARGETS
+    from collections import Counter
+    cfg, store = _ctx()
+    targets = targets_from_config(cfg)
+    matched = [(r, m) for r in store.all_rows() for m in [match_row(r["khatedar"], r["father"], targets)] if m]
+    # cluster signals computed in memory (no DB reads between the writes)
+    fam = Counter((r["district"], r["tehsil"]) for r, m in matched if m.target.id in FAMILY_TARGETS)
+    sib = Counter((r["village_code"], m.target.id) for r, m in matched)
+    hits = []
+    for r, m in matched:
+        cat, why = categorise(m, split_label(r["district"])[0], sib[(r["village_code"], m.target.id)],
+                              fam[(r["district"], r["tehsil"])])
+        hits.append((r["id"], m.target.id, m.name_score, m.father_score, m.score, cat, why))
+    store.replace_hits(hits)
+    t = store.totals()
+    console.print(f"[green]rematched: {t['probable']} probable, {t['less_probable']} less probable[/green]")
+
+
 @app.command("reset-errors")
 def reset_errors_cmd(district: List[str] = typer.Option(None, "--district", "-d")):
     """Put errored villages back in the queue."""
