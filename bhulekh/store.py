@@ -141,12 +141,16 @@ class Store:
                                   (amount, district))
             self.conn.commit()
 
-    def next_pending(self, districts: Optional[list[str]], limit: int, max_attempts: int) -> list[Village]:
+    def next_pending(self, districts: Optional[list[str]], limit: int, max_attempts: int,
+                     district: Optional[str] = None, tehsil: Optional[str] = None) -> list[Village]:
         q = "SELECT code,label,district,tehsil,name_en,name_hi FROM villages WHERE status!='done' AND attempts<?"
         args: list = [max_attempts]
         if districts:
             q += " AND district IN (%s)" % ",".join("?" * len(districts))
             args += districts
+        if district and tehsil:
+            q += " AND district=? AND tehsil=?"
+            args += [district, tehsil]
         q += " ORDER BY priority, district, tehsil, code LIMIT ?"
         args.append(limit)
         return [Village(*r) for r in self.conn.execute(q, args)]
@@ -265,6 +269,29 @@ class Store:
         ex = self.conn.execute("SELECT COUNT(*) FROM extracts").fetchone()[0]
         return {"villages": r["total"] or 0, "done": r["done"] or 0, "errors": r["errors"] or 0,
                 "rows": rows, "probable": hp, "less_probable": hl, "extracts": ex}
+
+    def timing_summary(self, window_s: float = 1800.0) -> dict:
+        """Median seconds per step from 'timing' events (detail = 'code k=v k=v …'), plus timeout URLs."""
+        import statistics
+        now = time.time()
+        per: dict = {}
+        n = 0
+        for (detail,) in self.conn.execute("SELECT detail FROM events WHERE kind='timing' AND ts>?", (now - window_s,)):
+            n += 1
+            for tok in detail.split()[1:]:
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    try:
+                        per.setdefault(k, []).append(float(v))
+                    except ValueError:
+                        pass
+        out = {k: (round(statistics.median(v), 2), len(v)) for k, v in per.items()}
+        timeouts: dict = {}
+        for (detail,) in self.conn.execute("SELECT detail FROM events WHERE kind='error' AND ts>?", (now - window_s,)):
+            key = "timeout " + detail.split("timeout waiting for", 1)[1].split()[0] if "timeout waiting for" in detail \
+                else detail.split(" ", 1)[1][:50] if " " in detail else detail[:50]
+            timeouts[key] = timeouts.get(key, 0) + 1
+        return {"villages": n, "steps": out, "errors": dict(sorted(timeouts.items(), key=lambda kv: -kv[1])[:6])}
 
     def recent_rate(self, window_s: float = 120.0) -> tuple[float, float]:
         """(villages/s, errors/s) over the last window."""

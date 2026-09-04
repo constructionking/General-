@@ -21,9 +21,10 @@ FAMILY_TARGETS = ("T1", "T2")
 class Scanner:
     def __init__(self, cfg: dict, store: Store, districts: Optional[list[str]], limit: Optional[int],
                  headless: bool = True, old_fasli: Optional[bool] = None, max_tabs: Optional[int] = None,
-                 capture: bool = True, start_tabs: Optional[int] = None):
+                 capture: bool = True, start_tabs: Optional[int] = None, affinity: bool = True):
         self.cfg = cfg
         self.capture = capture
+        self.affinity = affinity
         self.store = store
         self.districts = districts
         self.limit = limit
@@ -45,12 +46,29 @@ class Scanner:
         self.stop = False
         self.max_rows_seen = 0
         self._lock: Optional[asyncio.Lock] = None   # created inside the running loop (py3.9)
+        self._open_sem: Optional[asyncio.Semaphore] = None  # stagger tab start-up (7 MB bundle per cold tab)
+
+    async def _new_tab(self, portal: Portal) -> Tab:
+        async with self._open_sem:
+            return await portal.new_tab()
 
     # ---- queue ---------------------------------------------------------
-    async def claim_next(self) -> Optional[Village]:
+    async def claim_next(self, tab: Optional[Tab] = None) -> Optional[Village]:
         async with self._lock:
             if self.limit is not None and self.done_count + len(self.claimed) >= self.limit:
                 return None
+            # tehsil affinity: keep a tab on the tehsil it is already on (avoids district/tehsil reloads)
+            if self.affinity and tab is not None and tab.district and tab.tehsil:
+                for v in self.buffer:
+                    if v.district == tab.district and v.tehsil == tab.tehsil:
+                        self.buffer.remove(v)
+                        self.claimed.add(v.code)
+                        return v
+                cand = self.store.next_pending(self.districts, 5, self.retries, district=tab.district, tehsil=tab.tehsil)
+                for v in cand:
+                    if v.code not in self.claimed and v.district not in self.skip:
+                        self.claimed.add(v.code)
+                        return v
             if not self.buffer:
                 cand = self.store.next_pending(self.districts, 40, self.retries)
                 self.buffer = [v for v in cand if v.code not in self.claimed and v.district not in self.skip]
@@ -71,8 +89,10 @@ class Scanner:
         for fasli in faslis:
             await tab.set_fasli(fasli)
             for prefix in self.prefixes:
-                rows = await tab.search_name_complete(prefix, big=self.cfg.get("expand_above_rows", 1000))
+                rows = await tab.search_name_complete(prefix, big=self.cfg.get("expand_above_rows", 1500))
                 self.max_rows_seen = max(self.max_rows_seen, len(rows))
+                if tab.timings.get("expanded"):
+                    self.store.event("expand", f"{v.code} {prefix} {len(rows)} rows")
                 ids = self.store.add_rows(v.code, prefix, fasli, (r.as_dict() for r in rows))
                 for r, rid in zip(rows, ids):
                     m = match_row(r.khatedar, r.father, self.targets)
@@ -107,17 +127,19 @@ class Scanner:
                 if not self.rate.allows(self.active):
                     await asyncio.sleep(1.0)
                     continue
-                v = await self.claim_next()
+                v = await self.claim_next(tab)
                 if v is None:
                     return
                 self.active += 1
                 t0 = time.time()
                 try:
                     if tab is None:
-                        tab = await portal.new_tab()
+                        tab = await self._new_tab(portal)
                     self.store.mark_started(v.code)
                     hits = await asyncio.wait_for(self.scan_village(tab, v), timeout=self.village_timeout)
                     self.store.mark_done(v.code)
+                    self.store.event("timing", f"{v.code} total={time.time()-t0:.2f} " +
+                                     " ".join(f"{k}={val}" for k, val in tab.timings.items()))
                     self.rate.record_success()
                     self.done_count += 1
                     self.hit_count += hits
@@ -142,6 +164,7 @@ class Scanner:
 
     async def run(self):
         self._lock = asyncio.Lock()
+        self._open_sem = asyncio.Semaphore(2)
         if not self.store.districts():
             async with Portal(self.cfg["portal_url"], headless=self.headless) as portal:
                 await ensure_districts(self.store, portal)

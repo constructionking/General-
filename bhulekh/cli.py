@@ -54,6 +54,7 @@ def scan(district: List[str] = typer.Option(None, "--district", "-d", help="dist
          old_fasli: Optional[bool] = typer.Option(None, help="also search the older fasli band"),
          reset_errors: bool = typer.Option(False, help="retry villages that errored out earlier"),
          fast: bool = typer.Option(True, "--fast/--render", help="fast tier reads the decrypted list in-page instead of rendering rows"),
+         affinity: bool = typer.Option(True, "--tehsil-affinity/--no-tehsil-affinity", help="keep each tab on one tehsil"),
          headed: bool = typer.Option(False, help="show the browser")):
     """Scan villages for the configured targets. Resumable; re-run to continue."""
     from .catalog import resolve_districts
@@ -79,7 +80,7 @@ def scan(district: List[str] = typer.Option(None, "--district", "-d", help="dist
     if reset_errors:
         store.reset_errors(ds)
     sc = Scanner(cfg, store, ds, limit, headless=not headed, old_fasli=old_fasli, max_tabs=max_tabs, capture=fast,
-                 start_tabs=start_tabs)
+                 start_tabs=start_tabs, affinity=affinity)
     try:
         asyncio.run(sc.run())
     except KeyboardInterrupt:
@@ -146,6 +147,12 @@ def status():
     console.print(f"villages {t['done']}/{t['villages']} scanned, {t['errors']} errors · rows {t['rows']} · "
                   f"hits: [green]{t['probable']} probable[/green], [yellow]{t['less_probable']} less probable[/yellow] · "
                   f"extracts {t['extracts']} · last 2 min: {rate*60:.0f} villages/min, {err*60:.1f} errors/min")
+    ts = store.timing_summary()
+    if ts["villages"]:
+        steps = ", ".join(f"{k} {v[0]}s" for k, v in sorted(ts["steps"].items()))
+        console.print(f"last 30 min: {ts['villages']} villages · median per step: {steps}")
+    if ts["errors"]:
+        console.print("errors (30 min): " + ", ".join(f"{k} ×{n}" for k, n in ts["errors"].items()))
     tbl = Table("district", "villages", "done", "errors", "pending", "%")
     for r in store.coverage():
         if (r["done"] or 0) + (r["errors"] or 0) == 0:

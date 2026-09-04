@@ -10,7 +10,7 @@ old_fasli: false
 
 # when a single-letter search returns at least this many rows, re-run it with every two-character
 # prefix and merge (guards against any server-side result cap)
-expand_above_rows: 1000
+expand_above_rows: 1500
 
 concurrency:
   start: 6          # tabs to open at launch
