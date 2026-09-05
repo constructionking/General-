@@ -6,13 +6,21 @@ khatedar + father name pairs, categorises the hits, and helps you download every
 Targets live in `config.yaml` (khatedar spellings, father spellings, on-screen-keyboard prefixes).
 A row is a hit only when **both** the khatedar and the father match.
 
-## Setup (once)
+## Setup (once, on the machine that will run the sweep)
+
+Needs git and Python 3.9+ (macOS: `xcode-select --install` provides git; python3 from python.org or Homebrew).
 
 ```bash
-cd "khasra:khatauni search"
+git clone https://github.com/constructionking/General- bhulekh && cd bhulekh
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m playwright install chromium
+.venv/bin/python -m playwright install chromium     # downloads the browser Playwright drives (~150 MB)
+./bhulekh.sh doctor -d Amroha                        # every stage should PASS, each in a few seconds
 ```
+
+Run the sweep on a normal home/office connection, not from a cloud sandbox: the scanner is bound by the
+round trip to upbhulekh.gov.in, and 16 tabs on a normal link measured about 1.3 villages/s. Progress lives in
+`data/bhulekh.sqlite`, so Ctrl-C and re-running the same command resumes. To keep the code current later:
+`git pull`.
 
 ## Everyday commands
 
