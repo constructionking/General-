@@ -1,0 +1,83 @@
+# Search order: Lucknow, then Sitapur, then every other district in concentric rings of neighbours
+# fanning out from Lucknow, each ring walked clockwise starting from the Sitapur direction (north).
+# Apply with:  ./bhulekh.sh strategy -f strategy.fanout.yaml -t "Lucknow, Sitapur, then rings clockwise"
+levels:
+  districts:
+    - Lucknow
+    - Sitapur
+    - Bara Banki
+    - Rae Bareli
+    - Unnao
+    - Hardoi
+    - Kheri
+    - Bahraich
+    - Gonda
+    - Ayodhya
+    - Amethi
+    - Pratapgarh
+    - Fatehpur
+    - Kanpur Nagar
+    - Kannauj
+    - Farrukhabad
+    - Shahjahanpur
+    - Shrawasti
+    - Balrampur
+    - Siddharthnagar
+    - Basti
+    - Ambedkar Nagar
+    - Sultanpur
+    - Jaunpur
+    - Prayagraj
+    - Kaushambi
+    - Banda
+    - Hamirpur
+    - Kanpur Dehat
+    - Auraiya
+    - Etawah
+    - Mainpuri
+    - Etah
+    - Budaun
+    - Bareilly
+    - Pilibhit
+    - Mahrajganj
+    - Sant Kabir Nagar
+    - Azamgarh
+    - Ghazipur
+    - Varanasi
+    - Bhadohi
+    - Mirzapur
+    - Chitrakoot
+    - Mahoba
+    - Jalaun
+    - Agra
+    - Firozabad
+    - Hathras
+    - Aligarh
+    - Kasganj
+    - Sambhal
+    - Moradabad
+    - Rampur
+    - Kushinagar
+    - Gorakhpur
+    - Ballia
+    - Mau
+    - Chandauli
+    - Sonbhadra
+    - Jhansi
+    - Mathura
+    - Gautam Buddha Nagar
+    - Bulandshahr
+    - Amroha
+    - Bijnor
+    - Deoria
+    - Lalitpur
+    - Ghaziabad
+    - Hapur
+    - Meerut
+    - Muzaffarnagar
+    - Saharanpur
+    - Baghpat
+    - Shamli
+skip: {districts: []}
+adaptive:
+  boost_neighbours_on_hit: true
