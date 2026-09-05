@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 
 # precomposed nukta letters -> base letter
 _NUKTA_MAP = {
@@ -44,8 +45,13 @@ def strip_nukta(s: str) -> str:
     return s.replace(_NUKTA_COMBINING, "")
 
 
+@lru_cache(maxsize=65536)
 def clean(s: str) -> str:
-    """Normalise a khatauni name field to a comparable string."""
+    """Normalise a khatauni name field to a comparable string.
+
+    Cached: matching compares every row against the same handful of target spellings, so the same
+    strings are normalised millions of times over a full rematch. The cache is bounded, and LRU keeps
+    the target spellings resident while row values churn through it."""
     if not s:
         return ""
     s = strip_nukta(s).translate(_DEV_DIGITS)
@@ -56,6 +62,7 @@ def clean(s: str) -> str:
     return " ".join(toks)
 
 
+@lru_cache(maxsize=65536)
 def skeleton(s: str) -> str:
     return clean(s).translate(_VOWEL_LEN)
 

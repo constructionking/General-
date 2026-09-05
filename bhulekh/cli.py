@@ -183,25 +183,36 @@ def rematch():
     from .matcher import categorise, match_row, near_miss, targets_from_config
     from .scanner import FAMILY_TARGETS
     from collections import Counter
+    from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
     cfg, store = _ctx()
     targets = targets_from_config(cfg)
+    total = store.row_count()
     matched, misses = [], []
-    for r in store.all_rows():
-        m = match_row(r["khatedar"], r["father"], targets)
-        if m:
-            matched.append((r, m))
-        else:
-            nm = near_miss(r["khatedar"], r["father"], targets)
-            if nm:
-                misses.append((r["id"], nm.target.id, nm.name_score, nm.father_score, nm.name_score, "near_miss", nm.reason))
+    # rows are streamed, never listed: a full state sweep holds well over a million of them
+    with Progress(TextColumn("[progress.description]{task.description}"), BarColumn(),
+                  TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(),
+                  TimeRemainingColumn(), console=console) as progress:
+        task_id = progress.add_task("re-scoring stored rows…", total=total)
+        for i, r in enumerate(store.all_rows(), 1):
+            m = match_row(r["khatedar"], r["father"], targets)
+            if m:
+                matched.append((r["id"], m, r["village_code"], r["district"], r["tehsil"]))
+            else:
+                nm = near_miss(r["khatedar"], r["father"], targets)
+                if nm:
+                    misses.append((r["id"], nm.target.id, nm.name_score, nm.father_score, nm.name_score,
+                                   "near_miss", nm.reason))
+            if i % 5000 == 0:
+                progress.update(task_id, completed=i,
+                                description=f"re-scoring · {len(matched)} hits · {len(misses)} near-misses")
+        progress.update(task_id, completed=total)
     # cluster signals computed in memory (no DB reads between the writes)
-    fam = Counter((r["district"], r["tehsil"]) for r, m in matched if m.target.id in FAMILY_TARGETS)
-    sib = Counter((r["village_code"], m.target.id) for r, m in matched)
+    fam = Counter((d, t) for _, m, _, d, t in matched if m.target.id in FAMILY_TARGETS)
+    sib = Counter((vc, m.target.id) for _, m, vc, _, _ in matched)
     hits = []
-    for r, m in matched:
-        cat, why = categorise(m, split_label(r["district"])[0], sib[(r["village_code"], m.target.id)],
-                              fam[(r["district"], r["tehsil"])])
-        hits.append((r["id"], m.target.id, m.name_score, m.father_score, m.score, cat, why))
+    for rid, m, vc, district, tehsil in matched:
+        cat, why = categorise(m, split_label(district)[0], sib[(vc, m.target.id)], fam[(district, tehsil)])
+        hits.append((rid, m.target.id, m.name_score, m.father_score, m.score, cat, why))
     store.replace_hits(hits + misses)
     t = store.totals()
     console.print(f"[green]rematched: {t['probable']} probable, {t['less_probable']} less probable, "

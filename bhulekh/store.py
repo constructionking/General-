@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS districts (
@@ -227,10 +227,15 @@ class Store:
                 (row_id, target, name_score, father_score, score, category, reasoning, time.time()))
             self.conn.commit()
 
-    def all_rows(self) -> list[sqlite3.Row]:
-        return list(self.conn.execute(
+    def all_rows(self) -> Iterator[sqlite3.Row]:
+        """Stream every stored row with its village. A full sweep holds a million rows, so this must
+        not be materialised into a list: the cursor yields them a page at a time."""
+        return self.conn.execute(
             "SELECT r.id, r.khatedar, r.father, r.village_code, v.district, v.tehsil, v.name_en "
-            "FROM rows r JOIN villages v ON v.code=r.village_code ORDER BY r.village_code"))
+            "FROM rows r JOIN villages v ON v.code=r.village_code")
+
+    def row_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
 
     def replace_hits(self, hits: list[tuple]):
         """Atomically replace the hits table. hits = [(row_id, target, name_score, father_score, score, category, reasoning)].
