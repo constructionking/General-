@@ -16,6 +16,14 @@ from .store import Store, Village
 
 console = Console()
 FAMILY_TARGETS = ("T1", "T2")
+# Playwright's wording when the browser/driver is gone (Ctrl-C reached it first, or it crashed): every
+# further call fails instantly, so this is a reason to stop the run, not a failure of the village
+_DRIVER_DEAD = ("Connection closed", "has been closed", "Target closed", "browser has been closed",
+                "Browser closed", "Playwright connection closed")
+
+
+def driver_dead(exc: BaseException) -> bool:
+    return any(s in str(exc) for s in _DRIVER_DEAD)
 
 
 class Scanner:
@@ -163,6 +171,14 @@ class Scanner:
                     progress.update(task_id, advance=1)
                     progress.console.print(f"[cyan]{v.district} › {v.label}: skipped — {e}[/cyan]")
                 except (PortalError, asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
+                    if driver_dead(e):
+                        # the browser is gone: hand the attempt back and stop every worker; re-run resumes
+                        self.store.unmark_started(v.code)
+                        if not self.stop:
+                            self.stop = True
+                            self.store.event("stop", f"browser driver closed at {v.code}: {str(e)[:100]}")
+                            progress.console.print("[red]browser driver closed — stopping; re-run the same command to resume[/red]")
+                        return
                     msg = f"{type(e).__name__}: {str(e)[:160]}"
                     self.store.mark_error(v.code, msg)
                     self.store.event("error", f"{v.code} {msg}")

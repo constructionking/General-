@@ -160,6 +160,12 @@ class Store:
             self.conn.execute("UPDATE villages SET attempts=attempts+1 WHERE code=?", (code,))
             self.conn.commit()
 
+    def unmark_started(self, code: str):
+        """Give an attempt back: the village was not really tried (e.g. the browser died under it)."""
+        with self._lock:
+            self.conn.execute("UPDATE villages SET attempts=attempts-1 WHERE code=? AND attempts>0", (code,))
+            self.conn.commit()
+
     def mark_done(self, code: str):
         with self._lock:
             self.conn.execute("UPDATE villages SET status='done', error=NULL, scanned_at=? WHERE code=?",

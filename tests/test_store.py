@@ -36,6 +36,24 @@ def test_skipped_village_leaves_queue_and_counts_as_covered(tmp_path):
     assert [v.code for v in s.next_pending([AM], 10, 3)] == ["100001", "100003"]
 
 
+def test_unmark_started_gives_the_attempt_back(tmp_path):
+    s = _store(tmp_path)
+    s.mark_started("100001")
+    s.mark_started("100001")
+    s.unmark_started("100001")
+    assert s.conn.execute("SELECT attempts, status FROM villages WHERE code='100001'").fetchone()[:] == (1, "pending")
+    s.unmark_started("100001")
+    s.unmark_started("100001")   # never below zero
+    assert s.conn.execute("SELECT attempts FROM villages WHERE code='100001'").fetchone()[0] == 0
+
+
+def test_driver_death_is_recognised():
+    from bhulekh.scanner import driver_dead
+    assert driver_dead(Exception("Page.evaluate: Connection closed while reading from the driver"))
+    assert driver_dead(Exception("Target page, context or browser has been closed"))
+    assert not driver_dead(Exception("timeout waiting for api/fasli after selecting X"))
+
+
 def test_done_village_is_never_requeued(tmp_path):
     s = _store(tmp_path)
     s.mark_started("100003")
