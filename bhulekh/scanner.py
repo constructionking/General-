@@ -10,7 +10,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, Ti
 
 from .browser import CURRENT_FASLI, Portal, PortalDialog, PortalError, PortalServerError, Tab
 from .catalog import build_catalog, ensure_districts
-from .matcher import Target, all_prefixes, categorise, match_row, targets_from_config
+from .matcher import Target, all_prefixes, categorise, match_row, near_miss, targets_from_config
 from .ratectl import RateController
 from .store import Store, Village
 
@@ -78,13 +78,16 @@ class Scanner:
     async def scan_village(self, tab: Tab, v: Village) -> int:
         await tab.refresh_if_stale()
         try:
-            await tab.set_location(v.district, v.tehsil, v.label, v.code)
+            return await self._scan_once(tab, v)
         except PortalServerError as e:
-            # the portal rejects a tab's first calls now and then while other tabs are starting up
-            # (HTTP 500 with a fresh token): reload the page for a new token and try once more
+            # a 5xx, or an empty result with no dialog (dead session): the token is no longer accepted.
+            # Reload the page for a fresh token and do the village once more before it counts as an error.
             self.store.event("retry", f"{v.code} {e}")
             await tab.open_search()
-            await tab.set_location(v.district, v.tehsil, v.label, v.code)
+            return await self._scan_once(tab, v)
+
+    async def _scan_once(self, tab: Tab, v: Village) -> int:
+        await tab.set_location(v.district, v.tehsil, v.label, v.code)
         faslis = [CURRENT_FASLI]
         if self.old_fasli:
             faslis += [f for f in await tab.fasli_options() if f != CURRENT_FASLI]
@@ -100,6 +103,10 @@ class Scanner:
                 for r, rid in zip(rows, ids):
                     m = match_row(r.khatedar, r.father, self.targets)
                     if not m:
+                        nm = near_miss(r.khatedar, r.father, self.targets)
+                        if nm:   # right name, wrong father: kept for the "ruled out" audit table
+                            self.store.add_hit(rid, nm.target.id, nm.name_score, nm.father_score, nm.name_score,
+                                               "near_miss", nm.reason)
                         continue
                     self.store.add_hit(rid, m.target.id, m.name_score, m.father_score, m.score, "pending", "")
                     hits += 1

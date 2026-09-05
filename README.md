@@ -78,7 +78,9 @@ Levels: regions → districts → tehsils → village name patterns / specific c
 
 ## Outputs
 
-- `output/summary.md` / `.html` — Probable vs Less probable hits with reasoning, clusters, coverage, ETA.
+- `output/summary.md` / `.html` — the compilation: bottom line per target, coverage, plot tables per district with
+  area subtotals, ruled-out near-misses (right name, wrong father), reasoning, method, next steps. The rules the
+  matcher and scanner enforce are written up in `docs/search-logic.md`.
 - `output/hits.xlsx`, `hits.csv` — every hit with scores, reasoning and extract paths.
 - `output/<District>.xlsx` — every raw khatedar row collected for that district (prefixes स and वि).
 - `output/extracts/<District>/<Tehsil>/<village>_<code>_khata<no>_<fasli>.pdf|png|html`.

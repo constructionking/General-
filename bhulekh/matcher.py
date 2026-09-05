@@ -17,6 +17,16 @@ HIT_MIN = 80          # both names must reach this
 PROBABLE_MIN = 90     # both names must reach this AND no conflicting tokens
 FIRST_TOKEN_MIN = 85  # the given name itself must match: विनय is not विजय even if the surname matches
 
+# Surname / lineage tokens. A row that carries one of these which appears in NONE of the target's spellings
+# belongs to a different family, however similar the given names: सादिक हुसैन s/o साबिर खां shares no
+# lineage with सादिक अली s/o साबिर अली. Skeleton form (vowel length folded, व→ब) so spellings agree.
+LINEAGE_TOKENS = {
+    "अली", "खां", "खान", "खाँ", "खा", "शाह", "हुसैन", "हुसेन", "हुसैनी", "जैदी", "रिजवी", "नकवी", "सिद्दीकी",
+    "अंसारी", "कुरैशी", "शेख", "मलिक", "अहमद", "मोहम्मद", "सिंह", "यादव", "वर्मा", "शर्मा", "गुप्ता", "शुक्ला",
+    "शुक्ल", "मिश्रा", "मिश्र", "तिवारी", "पांडेय", "पाण्डेय", "दुबे", "द्विवेदी", "त्रिपाठी", "चौधरी", "कुमार",
+    "देवी", "प्रसाद", "लाल", "राम", "बेगम", "खातून", "बानो",
+}
+
 
 @dataclass
 class Target:
@@ -48,6 +58,46 @@ class Match:
         return self.name_score >= HIT_MIN and self.father_score >= HIT_MIN
 
 
+_LINEAGE_SK = {skeleton(t) for t in LINEAGE_TOKENS}
+
+
+def _lineage(value: str) -> set[str]:
+    """Lineage/surname tokens present in a name (skeleton form)."""
+    return {t for t in skeleton(value).split() if t in _LINEAGE_SK}
+
+
+def lineage_conflict(value: str, variants: list[str]) -> Optional[str]:
+    """The first lineage token in `value` that none of the target spellings carries, else None.
+    'साबिर' (no surname) never conflicts; 'साबिर खां' conflicts with ['साबिर अली', 'साबिर']."""
+    allowed = set()
+    for v in variants:
+        allowed |= _lineage(v)
+    for t in skeleton(value).split():
+        if t in _LINEAGE_SK and t not in allowed:
+            return t
+    return None
+
+
+def _first_token_ok(first: str, variant_first: str) -> bool:
+    """The given name must match on a token boundary: identical after normalisation, or a near-identical
+    spelling that is not merely the other with letters appended. Rejects the feminine साबिरा against साबिर
+    (a suffix) and सदाकत against सादिक (too different), accepts भालू against भल्लू (a conjunct)."""
+    if first == variant_first:
+        return True
+    if first.startswith(variant_first) or variant_first.startswith(first):
+        return False
+    return fuzz.ratio(first, variant_first) >= FIRST_TOKEN_MIN
+
+
+def _given_name_matches(value: str, variants: list[str]) -> bool:
+    """Does the given name (first token) of value match the given name of any variant?"""
+    for alias in aliases(value):
+        sk = skeleton(alias)
+        if sk and any(_first_token_ok(sk.split()[0], skeleton(v).split()[0]) for v in variants if skeleton(v)):
+            return True
+    return False
+
+
 def _best(value: str, variants: list[str]) -> tuple[float, str]:
     """Best skeleton ratio of any alias of value against any variant."""
     best, best_v = 0.0, ""
@@ -58,7 +108,7 @@ def _best(value: str, variants: list[str]) -> tuple[float, str]:
         first = sk.split()[0]
         for v in variants:
             skv = skeleton(v)
-            if fuzz.ratio(first, skv.split()[0]) < FIRST_TOKEN_MIN:
+            if not _first_token_ok(first, skv.split()[0]):
                 continue
             s = fuzz.ratio(sk, skv)
             if s > best:
@@ -87,9 +137,16 @@ def _father_regex_score(father: str, tgt: Target) -> tuple[float, str]:
 
 
 def match_row(khatedar: str, father: str, targets: list[Target]) -> Optional[Match]:
-    """Return the best Match among targets, or None when no target is a hit."""
+    """Return the best Match among targets, or None when no target is a hit.
+
+    The father is the anchor: the person's own name may vary in spelling, the father must match. A surname
+    line the target never uses (खां, शाह, हुसैन, जैदी, सिंह …) on either name rejects the row outright."""
     best: Optional[Match] = None
     for tgt in targets:
+        if lineage_conflict(khatedar, tgt.khatedar):
+            continue
+        if tgt.father and lineage_conflict(father, tgt.father):
+            continue
         ns, nv = _best(khatedar, tgt.khatedar)
         if tgt.father:
             fs, fv = _best(father, tgt.father)
@@ -101,6 +158,47 @@ def match_row(khatedar: str, father: str, targets: list[Target]) -> Optional[Mat
         m.conflicts = _conflicts(khatedar, nv) + (_conflicts(father, fv) if tgt.father else [])
         if best is None or m.score > best.score:
             best = m
+    return best
+
+
+@dataclass
+class NearMiss:
+    """Right name, wrong father (or a foreign surname line): logged for audit, never counted as family land."""
+    target: Target
+    name_score: float
+    father_score: float
+    name_variant: str
+    reason: str
+
+
+def near_miss(khatedar: str, father: str, targets: list[Target]) -> Optional[NearMiss]:
+    """When match_row returned None: does the khatedar alone match a target? Explains why the row failed."""
+    best: Optional[NearMiss] = None
+    for tgt in targets:
+        if not _given_name_matches(khatedar, tgt.khatedar):
+            continue
+        ns, nv = _best(khatedar, tgt.khatedar)
+        nv = nv or tgt.khatedar[0]
+        why = []
+        lc = lineage_conflict(khatedar, tgt.khatedar)
+        if lc:
+            why.append(f"खातेदार carries the surname line '{lc}', which the target never uses")
+        if tgt.father:
+            fs, _ = _best(father, tgt.father)
+            flc = lineage_conflict(father, tgt.father)
+            if flc:
+                why.append(f"पिता '{father}' is of the '{flc}' line, not '{tgt.father[0]}'")
+            elif fs < HIT_MIN:
+                why.append(f"पिता '{father}' does not match '{tgt.father[0]}' ({fs:.0f}%)")
+        else:
+            fs, _ = _father_regex_score(father, tgt)
+            if fs < HIT_MIN:
+                why.append(f"पिता '{father}' does not fit the initials pattern")
+        if not why:
+            continue
+        nm = NearMiss(tgt, ns, fs, nv, f"खातेदार matches '{nv}' ({ns:.0f}%) but " + "; ".join(why))
+        if best is None or nm.name_score > best.name_score:
+            best = nm
     return best
 
 
@@ -170,4 +268,5 @@ def all_prefixes(targets: list[Target]) -> list[str]:
     return out
 
 
-__all__ = ["Target", "Match", "match_row", "categorise", "targets_from_config", "all_prefixes", "clean"]
+__all__ = ["Target", "Match", "NearMiss", "match_row", "near_miss", "lineage_conflict", "categorise",
+           "targets_from_config", "all_prefixes", "clean"]

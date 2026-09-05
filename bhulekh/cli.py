@@ -110,7 +110,7 @@ def report(live: bool = typer.Option(False, help="mid-scan snapshot with coverag
     """Write summary.md / summary.html (Probable vs Less probable, reasoning, clusters, coverage)."""
     from .report import build_report
     cfg, store = _ctx()
-    md, html = build_report(store, cfg["output_dir"], live=live)
+    md, html = build_report(store, cfg["output_dir"], live=live, cfg=cfg)
     console.print(f"[green]report written:[/green] {md}\n                {html}")
 
 
@@ -146,7 +146,8 @@ def status():
     rate, err = store.recent_rate()
     console.print(f"villages {t['done']}/{t['villages']} scanned, {t['errors']} errors, {t['skipped']} skipped (no khatauni on portal) · "
                   f"rows {t['rows']} · "
-                  f"hits: [green]{t['probable']} probable[/green], [yellow]{t['less_probable']} less probable[/yellow] · "
+                  f"hits: [green]{t['probable']} probable[/green], [yellow]{t['less_probable']} less probable[/yellow], "
+                  f"{t['near_miss']} near-misses · "
                   f"extracts {t['extracts']} · last 2 min: {rate*60:.0f} villages/min, {err*60:.1f} errors/min")
     ts = store.timing_summary()
     if ts["villages"]:
@@ -162,7 +163,7 @@ def status():
                     str(r["skipped"] or 0), str(r["pending"] or 0),
                     f"{100.0*((r['done'] or 0) + (r['skipped'] or 0))/max(r['total'],1):.0f}")
     console.print(tbl)
-    for h in store.hits()[:20]:
+    for h in [x for x in store.hits() if x["category"] != "near_miss"][:20]:
         console.print(f"  [{'green' if h['category']=='probable' else 'yellow'}]{h['category']}[/] {h['target']} "
                       f"{split_label(h['district'])[0]} › {h['village_label']} · {h['khata']} · {h['khatedar']} / {h['father']}")
 
@@ -179,12 +180,20 @@ def doctor(district: Optional[str] = typer.Option(None, "--district", "-d", help
 @app.command()
 def rematch():
     """Re-score every stored khatedar row against the targets in config.yaml (no rescan needed)."""
-    from .matcher import categorise, match_row, targets_from_config
+    from .matcher import categorise, match_row, near_miss, targets_from_config
     from .scanner import FAMILY_TARGETS
     from collections import Counter
     cfg, store = _ctx()
     targets = targets_from_config(cfg)
-    matched = [(r, m) for r in store.all_rows() for m in [match_row(r["khatedar"], r["father"], targets)] if m]
+    matched, misses = [], []
+    for r in store.all_rows():
+        m = match_row(r["khatedar"], r["father"], targets)
+        if m:
+            matched.append((r, m))
+        else:
+            nm = near_miss(r["khatedar"], r["father"], targets)
+            if nm:
+                misses.append((r["id"], nm.target.id, nm.name_score, nm.father_score, nm.name_score, "near_miss", nm.reason))
     # cluster signals computed in memory (no DB reads between the writes)
     fam = Counter((r["district"], r["tehsil"]) for r, m in matched if m.target.id in FAMILY_TARGETS)
     sib = Counter((r["village_code"], m.target.id) for r, m in matched)
@@ -193,9 +202,10 @@ def rematch():
         cat, why = categorise(m, split_label(r["district"])[0], sib[(r["village_code"], m.target.id)],
                               fam[(r["district"], r["tehsil"])])
         hits.append((r["id"], m.target.id, m.name_score, m.father_score, m.score, cat, why))
-    store.replace_hits(hits)
+    store.replace_hits(hits + misses)
     t = store.totals()
-    console.print(f"[green]rematched: {t['probable']} probable, {t['less_probable']} less probable[/green]")
+    console.print(f"[green]rematched: {t['probable']} probable, {t['less_probable']} less probable, "
+                  f"{t['near_miss']} near-misses (right name, wrong father)[/green]")
 
 
 @app.command("reset-errors")

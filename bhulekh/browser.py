@@ -24,6 +24,8 @@ CURRENT_FASLI = "999"
 PAGE_LOAD_TIMEOUT_MS = int(float(os.environ.get("BHULEKH_PAGE_TIMEOUT_S", "90")) * 1000)
 OPEN_CONCURRENCY = 3             # tabs allowed to load the search page at the same time (after the first)
 TAB_MAX_AGE_S = 18 * 60          # portal JWT lives 25 min; reopen the page well before that
+REFRESH_EVERY_VILLAGES = 150     # the search session has been seen to die silently after ~195 villages
+DEAD_SESSION_S = 8.0             # a 200 with neither rows nor a "No Data" dialog for this long = dead session
 ROW_RE = re.compile(
     r"^\s*(?P<khata>.+?)\s*:\s*(?P<khatedar>.+?)\s*:\s*(?P<father>.+?)\s*:\s*(?P<code>\d{14,18})\s*:\s*\((?P<area>[\d.]+)\s*(?:हे[०0]?|ha)?\s*\)\s*$"
 )
@@ -268,6 +270,7 @@ class Tab:
         self.village_code: Optional[str] = None
         self.fasli: str = CURRENT_FASLI
         self.opened_at = 0.0
+        self.villages_since_open = 0     # pre-emptive refresh counter (see REFRESH_EVERY_VILLAGES)
         self.timings: dict = {}          # last step durations, e.g. {"district": 1.2, "village": 0.6, "search:स": 1.3}
 
     def _t(self, key: str, t0: float):
@@ -314,11 +317,13 @@ class Tab:
         self.district = self.tehsil = self.village_code = None
         self.fasli = CURRENT_FASLI
         self.opened_at = time.time()
+        self.villages_since_open = 0
         if self.portal.capture:
             await p.evaluate("() => { if (window.__bhu) window.__bhu.capture = true; }")
 
     async def refresh_if_stale(self):
-        if time.time() - self.opened_at > TAB_MAX_AGE_S:
+        """Reload before the token ages out or the session dies silently (~195 villages), rather than after."""
+        if time.time() - self.opened_at > TAB_MAX_AGE_S or self.villages_since_open >= REFRESH_EVERY_VILLAGES:
             await self.open_search()
 
     async def close(self):
@@ -433,6 +438,7 @@ class Tab:
         await self.ng_select("villageSelect", label, wait_url="api/fasli", typed=code)
         await asyncio.sleep(0.15)
         self.village_code = code
+        self.villages_since_open += 1
         self.fasli = CURRENT_FASLI
         self._t("village", t0)
 
@@ -545,8 +551,12 @@ class Tab:
         if resp.status >= 400:
             raise PortalError(f"http {resp.status} on uniqueCoden")
 
-        deadline = time.time() + timeout_s
+        t_resp = time.time()
+        deadline = t_resp + timeout_s
         while time.time() < deadline:
+            if time.time() - t_resp > DEAD_SESSION_S:
+                # a real empty village shows the "No Data Found" dialog; a dead session shows nothing at all
+                raise PortalServerError("empty result without a dialog (dead session)")
             state = await p.evaluate(
                 """(cap) => {
                      if (cap && window.__bhu && window.__bhu.seq > cap.seq) return {api: window.__bhu.rows};

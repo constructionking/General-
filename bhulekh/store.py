@@ -298,9 +298,11 @@ class Store:
         rows = self.conn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
         hp = self.conn.execute("SELECT COUNT(*) FROM hits WHERE category='probable'").fetchone()[0]
         hl = self.conn.execute("SELECT COUNT(*) FROM hits WHERE category='less_probable'").fetchone()[0]
+        nm = self.conn.execute("SELECT COUNT(*) FROM hits WHERE category='near_miss'").fetchone()[0]
         ex = self.conn.execute("SELECT COUNT(*) FROM extracts").fetchone()[0]
         return {"villages": r["total"] or 0, "done": r["done"] or 0, "errors": r["errors"] or 0,
-                "skipped": r["skipped"] or 0, "rows": rows, "probable": hp, "less_probable": hl, "extracts": ex}
+                "skipped": r["skipped"] or 0, "rows": rows, "probable": hp, "less_probable": hl,
+                "near_miss": nm, "extracts": ex}
 
     def timing_summary(self, window_s: float = 1800.0) -> dict:
         """Median seconds per step from 'timing' events (detail = 'code k=v k=v …'), plus timeout URLs."""
