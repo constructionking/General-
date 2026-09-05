@@ -1,0 +1,88 @@
+building catalog for 74 district(s) with 4 tab(s)…
+  Amethi (अमेठी): 4 tehsils, 962 villages
+  Aligarh (अलीगढ़): 5 tehsils, 1232 villages
+  Ayodhya (अयोध्या): 5 tehsils, 1292 villages
+  Ambedkar Nagar (अम्बेडकरनगर): 5 tehsils, 1792 villages
+  Agra (आगरा): 6 tehsils, 997 villages
+  Azamgarh (आजमगढ): retry 1 (Page.wait_for_selector: Timeout 10000ms exceeded.
+Call log:
+  - waiting for locator(".ng-dropdown-panel .ng-option") to be visible
+)
+  Etawah (इटावा): 6 tehsils, 789 villages
+  Etah (एटा): 3 tehsils, 866 villages
+  Unnao (उन्नाव): 6 tehsils, 1750 villages
+  Auraiya (औरैया): 3 tehsils, 878 villages
+  Kannauj (कन्नौज): 3 tehsils, 699 villages
+  Kanpur Dehat (कानपुर देहात): 6 tehsils, 1004 villages
+  Kanpur Nagar (कानपुर नगर): 4 tehsils, 1076 villages
+  Kasganj (कासगंज): 3 tehsils, 726 villages
+  Azamgarh (आजमगढ): retry 2 (Page.wait_for_selector: Timeout 10000ms exceeded.
+Call log:
+  - waiting for locator(".ng-dropdown-panel .ng-option") to be visible
+)
+  Kaushambi (कौशाम्बी): 3 tehsils, 867 villages
+  Ghaziabad (गाजियाबाद): 3 tehsils, 261 villages
+  Kushinagar (कुशीनगर): 6 tehsils, 1641 villages
+  Kheri (खीरी): 7 tehsils, 1770 villages
+  Gonda (गोंडा): 4 tehsils, 1810 villages
+  Gautam Buddha Nagar (गौतम बुद्ध नगर): 3 tehsils, 367 villages
+  Ghazipur (गाजीपुर): 7 tehsils, 3405 villages
+  Azamgarh (आजमगढ): 8 tehsils, 4088 villages
+  Gorakhpur (गोरखपुर): 7 tehsils, 3438 villages
+  Chitrakoot (चित्रकूट): 4 tehsils, 610 villages
+  Chandauli (चन्दौली): 5 tehsils, 1611 villages
+  Deoria (देवरिया): retry 1 (Page.wait_for_selector: Timeout 10000ms exceeded.
+Call log:
+  - waiting for locator(".ng-dropdown-panel .ng-option") to be visible
+)
+  Jalaun (जालौन): 5 tehsils, 1162 villages
+  Jhansi (झांसी): 5 tehsils, 829 villages
+  Pilibhit (पीलीभीत): 5 tehsils, 1438 villages
+  Jaunpur (जौनपुर): 6 tehsils, 3457 villages
+  Pratapgarh (प्रतापगढ): 5 tehsils, 2208 villages
+  Deoria (देवरिया): 5 tehsils, 2127 villages
+  Farrukhabad (फर्रूखाबाद): 3 tehsils, 996 villages
+  Firozabad (फिरोजाबाद): 5 tehsils, 819 villages
+  Fatehpur (फतेहपुर): 3 tehsils, 1697 villages
+  Balrampur (बलरामपुर): 3 tehsils, 1012 villages
+  Prayagraj (प्रयागराज): 8 tehsils, 3135 villages
+  Budaun (बदायूँ): 5 tehsils, 1731 villages
+  Bareilly (बरेली): 6 tehsils, 2156 villages
+  Baghpat (बागपत): 3 tehsils, 326 villages
+  Bahraich (बहराइच): 6 tehsils, 1365 villages
+  Ballia (बलिया): 6 tehsils, 2361 villages
+  Banda (बाँदा): 5 tehsils, 744 villages
+  Basti (बस्ती): 4 tehsils, 3328 villages
+  Bara Banki (बाराबंकी): 6 tehsils, 1842 villages
+  Bulandshahr (बुलन्द शहर): 7 tehsils, 1247 villages
+  Bhadohi (भदोही): 3 tehsils, 1267 villages
+  Mathura (मथुरा): 5 tehsils, 829 villages
+  Bijnor (बिजनौर): 5 tehsils, 2948 villages
+  Mahrajganj (महाराजगंज): 4 tehsils, 1196 villages
+  Mau (मऊ): 4 tehsils, 1641 villages
+  Mahoba (महोबा): 3 tehsils, 511 villages
+  Muzaffarnagar (मुजफफर नगर): 4 tehsils, 678 villages
+  Meerut (मेरठ): 3 tehsils, 716 villages
+  Mirzapur (मिर्जापुर): 4 tehsils, 1957 villages
+  Moradabad (मुरादाबाद): 4 tehsils, 1203 villages
+  Mainpuri (मैनपुरी): 6 tehsils, 855 villages
+  Rampur (रामपुर): 6 tehsils, 1162 villages
+  Lucknow (लखनऊ): 5 tehsils, 958 villages
+  Lalitpur (ललितपुर): 5 tehsils, 681 villages
+  Shamli (शामली): 3 tehsils, 316 villages
+  Rae Bareli (रायबरेली): 6 tehsils, 1601 villages
+  Shrawasti (श्रावस्ती): 3 tehsils, 532 villages
+  Varanasi (वाराणसी): 3 tehsils, 1405 villages
+  Sant Kabir Nagar (सन्तकबीर नगर): 3 tehsils, 1681 villages
+  Sambhal (सम्भल): 3 tehsils, 1001 villages
+  Shahjahanpur (शाहजहांपुर): 5 tehsils, 2364 villages
+  Saharanpur (सहारनपुर): 5 tehsils, 1611 villages
+  Sonbhadra (सोनभद्र): 4 tehsils, 1389 villages
+  Sultanpur (सुल्तानपुर): 5 tehsils, 1752 villages
+  Siddharthnagar (सिद्धार्थनगर): 5 tehsils, 2509 villages
+  Sitapur (सीतापुर): 7 tehsils, 2375 villages
+  Hamirpur (हमीरपुर): 4 tehsils, 621 villages
+  Hapur (हापुड़): 3 tehsils, 359 villages
+  Hathras (हाथरस): 4 tehsils, 680 villages
+  Hardoi (हरदोई): 5 tehsils, 2043 villages
+catalog: 107870 villages total

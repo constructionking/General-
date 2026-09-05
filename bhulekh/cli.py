@@ -54,6 +54,7 @@ def scan(district: List[str] = typer.Option(None, "--district", "-d", help="dist
          old_fasli: Optional[bool] = typer.Option(None, help="also search the older fasli band"),
          reset_errors: bool = typer.Option(False, help="retry villages that errored out earlier"),
          fast: bool = typer.Option(True, "--fast/--render", help="fast tier reads the decrypted list in-page instead of rendering rows"),
+         affinity: bool = typer.Option(True, "--tehsil-affinity/--no-tehsil-affinity", help="keep each tab on one tehsil"),
          headed: bool = typer.Option(False, help="show the browser")):
     """Scan villages for the configured targets. Resumable; re-run to continue."""
     from .catalog import resolve_districts
@@ -79,7 +80,7 @@ def scan(district: List[str] = typer.Option(None, "--district", "-d", help="dist
     if reset_errors:
         store.reset_errors(ds)
     sc = Scanner(cfg, store, ds, limit, headless=not headed, old_fasli=old_fasli, max_tabs=max_tabs, capture=fast,
-                 start_tabs=start_tabs)
+                 start_tabs=start_tabs, affinity=affinity)
     try:
         asyncio.run(sc.run())
     except KeyboardInterrupt:
@@ -147,6 +148,12 @@ def status():
                   f"rows {t['rows']} · "
                   f"hits: [green]{t['probable']} probable[/green], [yellow]{t['less_probable']} less probable[/yellow] · "
                   f"extracts {t['extracts']} · last 2 min: {rate*60:.0f} villages/min, {err*60:.1f} errors/min")
+    ts = store.timing_summary()
+    if ts["villages"]:
+        steps = ", ".join(f"{k} {v[0]}s" for k, v in sorted(ts["steps"].items()))
+        console.print(f"last 30 min: {ts['villages']} villages · median per step: {steps}")
+    if ts["errors"]:
+        console.print("errors (30 min): " + ", ".join(f"{k} ×{n}" for k, n in ts["errors"].items()))
     tbl = Table("district", "villages", "done", "errors", "skipped", "pending", "%")
     for r in store.coverage():
         if (r["done"] or 0) + (r["errors"] or 0) + (r["skipped"] or 0) == 0:
@@ -167,6 +174,28 @@ def doctor(district: Optional[str] = typer.Option(None, "--district", "-d", help
     from .doctor import run_doctor
     cfg, _ = _ctx()
     raise typer.Exit(code=0 if run_doctor(cfg, district, prefix) else 1)
+
+
+@app.command()
+def rematch():
+    """Re-score every stored khatedar row against the targets in config.yaml (no rescan needed)."""
+    from .matcher import categorise, match_row, targets_from_config
+    from .scanner import FAMILY_TARGETS
+    from collections import Counter
+    cfg, store = _ctx()
+    targets = targets_from_config(cfg)
+    matched = [(r, m) for r in store.all_rows() for m in [match_row(r["khatedar"], r["father"], targets)] if m]
+    # cluster signals computed in memory (no DB reads between the writes)
+    fam = Counter((r["district"], r["tehsil"]) for r, m in matched if m.target.id in FAMILY_TARGETS)
+    sib = Counter((r["village_code"], m.target.id) for r, m in matched)
+    hits = []
+    for r, m in matched:
+        cat, why = categorise(m, split_label(r["district"])[0], sib[(r["village_code"], m.target.id)],
+                              fam[(r["district"], r["tehsil"])])
+        hits.append((r["id"], m.target.id, m.name_score, m.father_score, m.score, cat, why))
+    store.replace_hits(hits)
+    t = store.totals()
+    console.print(f"[green]rematched: {t['probable']} probable, {t['less_probable']} less probable[/green]")
 
 
 @app.command("reset-errors")

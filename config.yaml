@@ -11,12 +11,13 @@ old_fasli: false
 # when a single-letter search returns at least this many rows, re-run it with every two-character
 # prefix and merge (guards against any server-side result cap). Single searches have returned 1,023 and
 # 1,604 rows in Amroha (so there is no cap at 1,000 or 1,024); the threshold sits well above that because
-# expanding costs ~50 extra searches (≈2 min) per village and matra keys return far fewer rows than the letter.
+# expanding costs 22 extra searches (EXPAND_KEYS in browser.py, ≈1 min) per village and the matra keys
+# return far fewer rows than the plain letter.
 expand_above_rows: 5000
 
 concurrency:
-  start: 6          # tabs to open at launch
-  max: 24           # hard cap ("aggressive" — raise only if the portal stays healthy)
+  start: 8          # tabs to open at launch
+  max: 16           # measured: 16 tabs ≈ 1.3 villages/s with <2% errors; more only slows the portal
   ramp_every_s: 45  # add +2 tabs after this many seconds without errors
   backoff_factor: 0.5
   min: 2

@@ -46,6 +46,15 @@ def test_family_hits():
     assert cat in ("probable", "less_probable") and "variant" in why or cat == "probable"
 
 
+def test_given_name_must_match():
+    assert _m("विनय शुक्ला", "राम शंकर शुक्ला") is None          # Vinay is not Vijay
+    assert _m("विनय कुमार शुक्ला", "रवि शंकर") is None
+    assert _m("सदाकत अली", "साबिर अली") is None                 # Sadaqat is not Sadiq
+    assert _m("साकिर", "वल्लू") is None
+    m = _m("साविर अली", "भल्लू")                                # व/ब swap is a spelling variant
+    assert m and m.target.id == "T1"
+
+
 def test_non_hits():
     assert _m("साबिर अली", "रहमत अली") is None
     assert _m("मक्खन", "मुरली") is None

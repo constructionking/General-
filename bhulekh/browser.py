@@ -28,6 +28,9 @@ ROW_RE = re.compile(
     r"^\s*(?P<khata>.+?)\s*:\s*(?P<khatedar>.+?)\s*:\s*(?P<father>.+?)\s*:\s*(?P<code>\d{14,18})\s*:\s*\((?P<area>[\d.]+)\s*(?:हे[०0]?|ha)?\s*\)\s*$"
 )
 _KEY_ALIASES = {" ": "space"}
+# second-character keys used when a single-letter result is suspiciously large: vowel signs, halant,
+# and the consonants that most often follow स/व in names (सत, सर, सन, सम, सल, सद, सब, सह, सक, सज)
+EXPAND_KEYS = ["ा", "ि", "ी", "ु", "ू", "े", "ै", "ो", "ं", "्", "त", "र", "न", "म", "ल", "द", "ब", "ह", "क", "ज", "व", "य"]
 
 CAPTURE_HOOK = """
 (() => {
@@ -265,6 +268,10 @@ class Tab:
         self.village_code: Optional[str] = None
         self.fasli: str = CURRENT_FASLI
         self.opened_at = 0.0
+        self.timings: dict = {}          # last step durations, e.g. {"district": 1.2, "village": 0.6, "search:स": 1.3}
+
+    def _t(self, key: str, t0: float):
+        self.timings[key] = round(time.time() - t0, 2)
 
     # ---- navigation ----------------------------------------------------
     async def open_search(self):
@@ -383,7 +390,10 @@ class Tab:
                 if dialog_means_no_records(shown):
                     raise PortalDialog(shown)
                 raise PortalError("portal dialog: " + shown)
-            resp = await waiter   # re-raises the 45 s timeout if the call never came
+            try:
+                resp = await waiter
+            except PWTimeout:
+                raise PortalError(f"timeout waiting for {wait_url} after selecting {text[:40]}")
             if resp.status >= 500:
                 # the dropdown would stay disabled for good; fail now so the step is retried with a fresh token
                 raise PortalServerError(f"server error {resp.status} on {wait_url.split('/')[-1]}")
@@ -399,28 +409,35 @@ class Tab:
         if self.district == label:
             return
         await self.portal.wait_idle()
+        t0 = time.time()
         await self.ng_select("districtSelect", label, wait_url="api/tehsils")
         await asyncio.sleep(0.15)
         self.district, self.tehsil, self.village_code = label, None, None
+        self._t("district", t0)
 
     async def set_tehsil(self, label: str):
         if self.tehsil == label:
             return
         await self.portal.wait_idle()
+        t0 = time.time()
         await self.ng_select("tehsilSelect", label, wait_url="api/villages")
         await asyncio.sleep(0.15)
         self.tehsil, self.village_code = label, None
+        self._t("tehsil", t0)
 
     async def set_village(self, label: str, code: str):
         if self.village_code == code:
             return
         await self.portal.wait_idle()
+        t0 = time.time()
         await self.ng_select("villageSelect", label, wait_url="api/fasli", typed=code)
         await asyncio.sleep(0.15)
         self.village_code = code
         self.fasli = CURRENT_FASLI
+        self._t("village", t0)
 
     async def set_location(self, district: str, tehsil: str, village_label: str, code: str):
+        self.timings = {}
         await self.set_district(district)
         await self.set_tehsil(tehsil)
         await self.set_village(village_label, code)
@@ -494,16 +511,27 @@ class Tab:
     # ---- khatedar name search ------------------------------------------
     async def search_name(self, prefix, timeout_s: float = 45.0) -> list[Row]:
         """Run 'खातेदार के नाम द्वारा खोजें' for a Devanagari prefix and return parsed rows."""
-        p = self.page
         await self.portal.wait_idle()
+        t0 = time.time()
+        label = "".join(prefix) if not isinstance(prefix, str) else prefix
+        try:
+            return await self._search_name(prefix, timeout_s)
+        finally:
+            self._t(f"search:{label}", t0)
+
+    async def _search_name(self, prefix, timeout_s: float) -> list[Row]:
+        p = self.page
         await self.type_prefix(prefix)
         capture = self.portal.capture
         seq_before = await p.evaluate("() => window.__bhu ? window.__bhu.seq : -1") if capture else -1
 
         for attempt in range(2):
-            async with p.expect_response(lambda r: "api/uniqueCoden" in r.url, timeout=timeout_s * 1000) as resp_info:
-                await p.click(".contact-page button.btn-primary")
-            resp = await resp_info.value
+            try:
+                async with p.expect_response(lambda r: "api/uniqueCoden" in r.url, timeout=timeout_s * 1000) as resp_info:
+                    await p.click(".contact-page button.btn-primary")
+                resp = await resp_info.value
+            except PWTimeout:
+                raise PortalError("timeout waiting for api/uniqueCoden")
             if resp.status < 500 or attempt:
                 break
             # a fresh tab's first search sometimes gets a 500; one in-tab retry is far cheaper than a new tab
@@ -552,13 +580,17 @@ class Tab:
             await asyncio.sleep(0.1)
         raise PortalError("timeout waiting for name-search results")
 
-    async def search_name_complete(self, prefix: str, big: int = 1000) -> list[Row]:
-        """search_name, expanded into two-character prefixes when the result is suspiciously large."""
+    async def search_name_complete(self, prefix: str, big: int = 1500, expand_keys: Optional[list[str]] = None) -> list[Row]:
+        """search_name, expanded into two-character prefixes when the result is suspiciously large.
+
+        Returns the merged rows; sets self.timings['expanded'] = number of extra searches when it expanded."""
         rows = await self.search_name(prefix)
         if len(rows) < big:
             return rows
         seen = {(r.unique_code, r.khatedar, r.father): r for r in rows}
-        for k in await self.keyboard_keys():
+        keys = expand_keys or EXPAND_KEYS
+        self.timings["expanded"] = len(keys)
+        for k in keys:
             try:
                 more = await self.search_name([*prefix, k])
             except PortalError:
