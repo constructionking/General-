@@ -505,7 +505,18 @@ class Tab:
         when passed as a single element of a list; a plain string is typed character by character."""
         p = self.page
         await self.dismiss_dialog()
-        if not await p.evaluate("() => document.querySelector('#contact').checked"):
+        try:
+            # the search panel re-renders after the village/fasli change; give the tab a moment to appear
+            await p.wait_for_selector("#contact", state="attached", timeout=10000)
+        except PWTimeout:
+            shown = await self.dismiss_dialog()
+            if shown and dialog_means_no_records(shown):
+                raise PortalDialog(shown[:160])
+            diag = await p.evaluate(
+                "() => ((document.querySelector('.contact-page') || document.body).innerText || '')"
+                ".replace(/\\s+/g, ' ').trim().slice(0, 160)")
+            raise PortalError(f"khatedar-name tab not on the page after selecting the village; page says: {diag!r}")
+        if not await p.evaluate("() => { const c = document.querySelector('#contact'); return !!(c && c.checked); }"):
             await p.click("label[for=contact]")
         await self._click_key("clear")
         await self._wait_input("")
