@@ -12,23 +12,23 @@ import asyncio
 import os
 import re
 import time
-from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import unquote, urlsplit
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PWTimeout, async_playwright
 
+from .rows import CURRENT_FASLI, PortalDialog, PortalError, PortalServerError, Row, dialog_means_no_records, parse_row, row_from_api
+
+__all__ = ["Portal", "Tab", "Row", "PortalError", "PortalDialog", "PortalServerError", "CURRENT_FASLI",
+           "dialog_means_no_records", "parse_row", "row_from_api", "EXPAND_KEYS", "PWTimeout"]
+
 SEARCH_ROUTE = "#/khatauni_rtk"
-CURRENT_FASLI = "999"
 # first load pulls a 7 MB Angular bundle; slow links need well over 20 s. BHULEKH_PAGE_TIMEOUT_S overrides.
 PAGE_LOAD_TIMEOUT_MS = int(float(os.environ.get("BHULEKH_PAGE_TIMEOUT_S", "90")) * 1000)
 OPEN_CONCURRENCY = 3             # tabs allowed to load the search page at the same time (after the first)
 TAB_MAX_AGE_S = 18 * 60          # portal JWT lives 25 min; reopen the page well before that
 REFRESH_EVERY_VILLAGES = 150     # the search session has been seen to die silently after ~195 villages
 DEAD_SESSION_S = 8.0             # a 200 with neither rows nor a "No Data" dialog for this long = dead session
-ROW_RE = re.compile(
-    r"^\s*(?P<khata>.+?)\s*:\s*(?P<khatedar>.+?)\s*:\s*(?P<father>.+?)\s*:\s*(?P<code>\d{14,18})\s*:\s*\((?P<area>[\d.]+)\s*(?:हे[०0]?|ha)?\s*\)\s*$"
-)
 _KEY_ALIASES = {" ": "space"}
 # second-character keys used when a single-letter result is suspiciously large: vowel signs, halant,
 # and the consonants that most often follow स/व in names (सत, सर, सन, सम, सल, सद, सब, सह, सक, सज)
@@ -61,65 +61,6 @@ QUIET_HOOK = """
   if (document.head) add(); else document.addEventListener('DOMContentLoaded', add, {once: true});
 })();
 """
-
-
-class PortalError(RuntimeError):
-    pass
-
-
-class PortalDialog(PortalError):
-    """The portal answered with a dialog instead of data, e.g. 'यह गाँव चकबंदी में है।' (village under
-    consolidation — no khatauni available). A statement about the village, not a transient failure."""
-
-
-class PortalServerError(PortalError):
-    """The portal answered 5xx. Seen on a fresh tab's first calls while other tabs start up; retryable."""
-
-
-NO_RECORDS_MARKERS = ("चकबंदी", "No Data", "नहीं", "उपलब्ध", "No Record", "no record")
-
-
-def dialog_means_no_records(text: str) -> bool:
-    """True for portal dialogs that state the village has no searchable khatauni (skip, don't retry);
-    False for anything else (session/maintenance/error popups), which is retried like any failure."""
-    return any(m in text for m in NO_RECORDS_MARKERS)
-
-
-@dataclass
-class Row:
-    khata: str
-    khatedar: str
-    father: str
-    unique_code: str
-    area: Optional[float]
-    raw: str
-
-    def as_dict(self) -> dict:
-        return {"khata": self.khata, "khatedar": self.khatedar, "father": self.father,
-                "unique_code": self.unique_code, "area": self.area, "raw": self.raw}
-
-
-def parse_row(text: str) -> Optional[Row]:
-    m = ROW_RE.match(text.replace("\n", " "))
-    if not m:
-        return None
-    try:
-        area = float(m.group("area"))
-    except ValueError:
-        area = None
-    return Row(m.group("khata").strip(), m.group("khatedar").strip(), m.group("father").strip(),
-               m.group("code"), area, text.strip())
-
-
-def row_from_api(d: dict) -> Row:
-    try:
-        area = float(d.get("area")) if d.get("area") not in (None, "") else None
-    except ValueError:
-        area = None
-    khata = (d.get("khasra_no") or d.get("khata_number") or "").strip()
-    name, father = (d.get("name") or "").strip(), (d.get("father") or "").strip()
-    return Row(khata, name, father, str(d.get("unique_code") or ""), area,
-               f"{khata} : {name} : {father} : {d.get('unique_code')} : ({d.get('area')} हे०)")
 
 
 def _env_proxy(env: Optional[dict] = None) -> Optional[dict]:

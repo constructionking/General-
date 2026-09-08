@@ -40,6 +40,20 @@ Useful scan flags: `--max-tabs 24 --start-tabs 12` (concurrency), `--limit 50` (
 `--old-fasli` (also search the older fasli band), `--reset-errors` (retry failed villages),
 `--render` (disable the fast in-page capture and read the rendered rows instead), `--headed`.
 
+### Scanning through the API instead of the browser
+
+```bash
+./bhulekh.sh scan --api -d Lucknow --limit 50                     # try it
+./bhulekh.sh scan --api --all --strategy strategy.fanout.yaml --reset-errors
+```
+
+`--api` calls the portal's own JSON API (the one its web page uses) with no Chromium involved: one
+village is two small HTTP requests instead of a browser session. Rows, matching, scoring and the
+database are exactly the same as the browser path; only the transport changes. The catalog still comes
+from `bhulekh catalog` and `download` still needs the browser (CAPTCHA). Concurrency is
+`api.concurrency` in `config.yaml` (default 8 — keep it modest, it is a shared public service).
+Details of the contract: `docs/api.md`.
+
 ## Environment overrides
 
 - `BHULEKH_CHROMIUM=/path/to/chrome` — drive an existing Chromium/Chrome instead of Playwright's downloaded one.

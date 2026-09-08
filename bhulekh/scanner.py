@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
-from .browser import CURRENT_FASLI, Portal, PortalDialog, PortalError, PortalServerError, Tab
-from .catalog import build_catalog, ensure_districts
 from .matcher import Target, all_prefixes, categorise, match_row, near_miss, targets_from_config
 from .ratectl import RateController
+from .rows import CURRENT_FASLI, PortalDialog, PortalError, PortalServerError
 from .store import Store, Village
+
+if TYPE_CHECKING:   # the browser driver (Playwright) is imported only when a browser scan actually starts
+    from .browser import Portal, Tab
 
 console = Console()
 FAMILY_TARGETS = ("T1", "T2")
@@ -29,10 +31,12 @@ def driver_dead(exc: BaseException) -> bool:
 class Scanner:
     def __init__(self, cfg: dict, store: Store, districts: Optional[list[str]], limit: Optional[int],
                  headless: bool = True, old_fasli: Optional[bool] = None, max_tabs: Optional[int] = None,
-                 capture: bool = True, start_tabs: Optional[int] = None, affinity: bool = True):
+                 capture: bool = True, start_tabs: Optional[int] = None, affinity: bool = True,
+                 use_api: bool = False):
         self.cfg = cfg
         self.capture = capture
         self.affinity = affinity
+        self.use_api = use_api          # talk to the portal's JSON API instead of driving its UI
         self.store = store
         self.districts = districts
         self.limit = limit
@@ -198,24 +202,39 @@ class Scanner:
             if tab is not None:
                 await tab.close()
 
+    def _portal(self):
+        if self.use_api:
+            from .api import ApiPortal
+            return ApiPortal(self.cfg, self.store, concurrency=self.rate.max)
+        from .browser import Portal
+        return Portal(self.cfg["portal_url"], headless=self.headless, capture=self.capture)
+
     async def run(self):
         self._lock = asyncio.Lock()
         if not self.store.districts():
+            if self.use_api:
+                raise PortalError("the catalog is empty; run `bhulekh catalog` (browser) once before --api scans")
+            from .browser import Portal
+            from .catalog import ensure_districts
             async with Portal(self.cfg["portal_url"], headless=self.headless) as portal:
                 await ensure_districts(self.store, portal)
         # make sure the catalog covers the requested districts
         need = [d for d in (self.districts or self.store.districts()) if not self.store.catalog_done(d)]
         if need:
+            if self.use_api:
+                raise PortalError(f"no catalog for {', '.join(need[:3])}…; run `bhulekh catalog` (browser) for them first")
+            from .catalog import build_catalog
             await build_catalog(self.cfg, self.store, need, tabs=min(6, len(need)), headless=self.headless)
         pending = len(self.store.next_pending(self.districts, 10**9, self.retries))
         total = min(pending, self.limit) if self.limit else pending
         if total == 0:
             console.print("[green]nothing pending for the selected districts[/green]")
             return
-        console.print(f"scanning {total} village(s), prefixes {self.prefixes}, max tabs {self.rate.max}")
-        self.store.event("scan_start", f"{total} villages")
+        mode = "API (no browser)" if self.use_api else "browser"
+        console.print(f"scanning {total} village(s), prefixes {self.prefixes}, max tabs {self.rate.max}, transport {mode}")
+        self.store.event("scan_start", f"{total} villages via {mode}")
         t0 = time.time()
-        async with Portal(self.cfg["portal_url"], headless=self.headless, capture=self.capture) as portal:
+        async with self._portal() as portal:
             with Progress(TextColumn("[progress.description]{task.description}"), BarColumn(),
                           TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(),
                           TimeRemainingColumn(), console=console) as progress:

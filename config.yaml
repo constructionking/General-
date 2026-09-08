@@ -15,6 +15,13 @@ old_fasli: false
 # return far fewer rows than the plain letter.
 expand_above_rows: 5000
 
+# `scan --api` talks to the portal's JSON API directly (no Chromium). One village is then two small
+# HTTP calls instead of a browser session, so far fewer parallel requests are needed than tabs.
+# Keep this modest: the portal is a shared public service.
+api:
+  base_url: "https://upbhulekh.gov.in/PublicBhuApi/api"
+  concurrency: 8    # parallel requests in flight (also the worker count for --api)
+
 concurrency:
   start: 8          # tabs to open at launch
   max: 16           # measured: 16 tabs ≈ 1.3 villages/s with <2% errors; more only slows the portal

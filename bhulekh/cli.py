@@ -55,6 +55,7 @@ def scan(district: List[str] = typer.Option(None, "--district", "-d", help="dist
          reset_errors: bool = typer.Option(False, help="retry villages that errored out earlier"),
          fast: bool = typer.Option(True, "--fast/--render", help="fast tier reads the decrypted list in-page instead of rendering rows"),
          affinity: bool = typer.Option(True, "--tehsil-affinity/--no-tehsil-affinity", help="keep each tab on one tehsil"),
+         api: bool = typer.Option(False, "--api/--browser", help="call the portal's JSON API directly instead of driving its UI (no Chromium)"),
          headed: bool = typer.Option(False, help="show the browser")):
     """Scan villages for the configured targets. Resumable; re-run to continue."""
     from .catalog import resolve_districts
@@ -79,8 +80,11 @@ def scan(district: List[str] = typer.Option(None, "--district", "-d", help="dist
         ds = resolve_districts(store, district)
     if reset_errors:
         store.reset_errors(ds)
+    if api and max_tabs is None:
+        max_tabs = cfg.get("api", {}).get("concurrency", 8)
+        start_tabs = start_tabs or max_tabs
     sc = Scanner(cfg, store, ds, limit, headless=not headed, old_fasli=old_fasli, max_tabs=max_tabs, capture=fast,
-                 start_tabs=start_tabs, affinity=affinity)
+                 start_tabs=start_tabs, affinity=affinity, use_api=api)
     try:
         asyncio.run(sc.run())
     except KeyboardInterrupt:

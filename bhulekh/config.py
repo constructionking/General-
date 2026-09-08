@@ -22,6 +22,8 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
     cc.setdefault("start", 6); cc.setdefault("max", 24); cc.setdefault("ramp_every_s", 45)
     cc.setdefault("backoff_factor", 0.5); cc.setdefault("min", 2)
     cc.setdefault("village_timeout_s", 40); cc.setdefault("retries", 3)
+    api = cfg.setdefault("api", {})
+    api.setdefault("base_url", "https://upbhulekh.gov.in/PublicBhuApi/api"); api.setdefault("concurrency", 8)
     for k in ("db_path", "output_dir", "extracts_dir"):
         if not os.path.isabs(cfg[k]):
             cfg[k] = str(ROOT / cfg[k])
